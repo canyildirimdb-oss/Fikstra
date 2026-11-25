@@ -53,10 +53,10 @@ export function BulletinPage({ onSelectMatch, refreshTrigger }: Props) {
           <button
             key={m.key}
             onClick={() => setMarket(m.key)}
-            className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
+            className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all ${
               market === m.key
-                ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/40"
-                : "bg-[#131926] text-slate-400 border-[#1F2937]"
+                ? "bg-[#00FF85] text-[#05080D] shadow-[0_0_14px_-4px_rgba(0,255,133,0.7)]"
+                : "glass-card text-slate-300 hover:text-white"
             }`}
           >
             {m.label}
@@ -118,9 +118,9 @@ export function BulletinPage({ onSelectMatch, refreshTrigger }: Props) {
           {leagues.map((lg) => (
             <div
               key={lg.league}
-              className="rounded-2xl bg-[#131926] border border-[#1F2937] overflow-hidden"
+              className="rounded-2xl glass-card overflow-hidden"
             >
-              <div className="px-4 py-2.5 bg-[#090D16]/80 border-b border-[#1F2937] flex items-center justify-between">
+              <div className="px-4 py-2.5 bg-[#05080D]/75 border-b border-white/[0.06] flex items-center justify-between">
                 <div className="flex items-center gap-2 min-w-0">
                   <LeagueBadge name={lg.league} logoUrl={lg.matches[0]?.league_logo_url} />
                   <span className="text-xs font-bold text-slate-200 truncate">{lg.league}</span>

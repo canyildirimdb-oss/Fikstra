@@ -4,7 +4,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.models import Coupon, Match, Prediction
+from app.models import Coupon, CouponItem, Match, Prediction
 from scrapers.external_data import fetch_espn_events_for_dates
 from utils.team_matcher import find_best_external_match
 
@@ -63,11 +63,80 @@ def _mark_match_void(db: Session, match: Match, now: datetime) -> int:
     return 1
 
 
+def cleanup_multi_market_settled_predictions(db: Session) -> int:
+    """
+    Ensure every settled match has at most ONE official #1 prediction (is_top_pick=True)
+    counted in performance/archive. Legacy multi-market WON/LOST rows for the same match
+    are demoted (is_top_pick=False, and marked VOID if not referenced by a CouponItem).
+    """
+    settled_rows = (
+        db.query(Prediction)
+        .filter(Prediction.status.in_(["WON", "LOST"]))
+        .all()
+    )
+    if not settled_rows:
+        return 0
+
+    by_match: dict[int, list[Prediction]] = {}
+    for p in settled_rows:
+        by_match.setdefault(p.match_id, []).append(p)
+
+    coupon_pred_ids = {
+        row[0] for row in db.query(CouponItem.prediction_id).distinct().all()
+    }
+
+    cleaned = 0
+    for mid, preds in by_match.items():
+        flagged = [p for p in preds if p.is_top_pick]
+        if len(flagged) == 1 and len(preds) == 1:
+            continue
+
+        if flagged:
+            official = max(
+                flagged,
+                key=lambda p: (
+                    p.confidence_score,
+                    p.value_edge_pct if p.value_edge_pct is not None else -99.0,
+                    p.iddaa_odd,
+                ),
+            )
+        else:
+            eligible = [p for p in preds if p.iddaa_odd < 4.0] or preds
+            official = max(
+                eligible,
+                key=lambda p: (
+                    p.confidence_score,
+                    p.value_edge_pct if p.value_edge_pct is not None else -99.0,
+                    p.iddaa_odd,
+                ),
+            )
+
+        for p in preds:
+            if p.id == official.id:
+                if not p.is_top_pick:
+                    p.is_top_pick = True
+                    cleaned += 1
+            else:
+                if p.is_top_pick:
+                    p.is_top_pick = False
+                    cleaned += 1
+                if p.id not in coupon_pred_ids:
+                    p.status = "VOID"
+                    cleaned += 1
+
+    if cleaned:
+        db.commit()
+    return cleaned
+
+
 def settle_finished_matches(db: Session, espn_events: Optional[list[dict]] = None) -> int:
     """
     Settle matches whose kickoff was 130+ minutes ago using real 90-minute regular-time scores.
+    Only the single official #1 pick (is_top_pick=True) per match is settled as WON/LOST for
+    archive & performance stats (coupon-referenced secondary picks settle only for their coupon).
     Postponed/canceled/abandoned/36h+ stale matches and unseparable AET/PEN matches are marked VOID.
     """
+    cleanup_multi_market_settled_predictions(db)
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(minutes=130)
     stale_void_cutoff = now - timedelta(hours=36)
@@ -131,9 +200,40 @@ def settle_finished_matches(db: Session, espn_events: Optional[list[dict]] = Non
             .filter(Prediction.match_id == match.id, Prediction.status == "PENDING")
             .all()
         )
-        for p in preds:
-            p.status = evaluate_prediction_outcome(p.market_key, p.selection_key, hs, as_)
-            p.settled_at = now
+        if preds:
+            flagged = [p for p in preds if p.is_top_pick]
+            if flagged:
+                official = flagged[0]
+            else:
+                eligible = [p for p in preds if p.iddaa_odd < 4.0] or preds
+                official = max(
+                    eligible,
+                    key=lambda p: (
+                        p.confidence_score,
+                        p.value_edge_pct if p.value_edge_pct is not None else -99.0,
+                        p.iddaa_odd,
+                    ),
+                )
+            pred_ids = [p.id for p in preds]
+            coupon_pred_ids = {
+                row[0]
+                for row in db.query(CouponItem.prediction_id)
+                .filter(CouponItem.prediction_id.in_(pred_ids))
+                .all()
+            }
+            for p in preds:
+                if p.id == official.id:
+                    p.is_top_pick = True
+                    p.status = evaluate_prediction_outcome(p.market_key, p.selection_key, hs, as_)
+                    p.settled_at = now
+                elif p.id in coupon_pred_ids:
+                    p.is_top_pick = False
+                    p.status = evaluate_prediction_outcome(p.market_key, p.selection_key, hs, as_)
+                    p.settled_at = now
+                else:
+                    p.is_top_pick = False
+                    p.status = "VOID"
+                    p.settled_at = now
 
     if settled_count:
         db.flush()

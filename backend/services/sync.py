@@ -537,6 +537,12 @@ def run_sync_pipeline(
         )
         db.commit()
 
+        try:
+            from app.routers.api import clear_api_cache
+            clear_api_cache()
+        except Exception:
+            pass
+
         return {
             "status": "success",
             "bulletin_count": len(bulletin),

@@ -57,9 +57,9 @@ export function PerformancePage({ refreshTrigger }: Props) {
     <div className="space-y-4">
       {/* Top Metrics */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div className="p-4 rounded-2xl bg-[#131926] border border-[#1F2937]">
+        <div className="p-4 rounded-2xl glass-card neon-bottom-glow">
           <p className="text-[11px] text-slate-400">Genel Tutturma</p>
-          <p className="text-2xl font-extrabold mono-nums text-emerald-400 mt-1">
+          <p className="text-2xl font-extrabold mono-nums text-[#00FF85] mt-1">
             {data.overall_win_rate !== null ? `%${data.overall_win_rate}` : "—"}
           </p>
           <p className="text-[10px] text-slate-500 mt-0.5">
@@ -67,7 +67,7 @@ export function PerformancePage({ refreshTrigger }: Props) {
           </p>
         </div>
 
-        <div className="p-4 rounded-2xl bg-[#131926] border border-[#1F2937]">
+        <div className="p-4 rounded-2xl glass-card">
           <p className="text-[11px] text-slate-400 flex items-center">
             Ortalama CLV %
             <MetricInfo text="Tahmini yakaladığınız oranın maç başlama saatindeki kapanış oranına göre yüzde kaç daha avantajlı olduğunu gösterir." />

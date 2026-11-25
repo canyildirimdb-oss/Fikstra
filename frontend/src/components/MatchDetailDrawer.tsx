@@ -167,7 +167,7 @@ export function MatchDetailDrawer({ matchId, couponPick, onClose }: Props) {
           onClick={onClose}
         >
           <motion.div
-            className="w-full md:max-w-2xl max-h-[90vh] overflow-y-auto rounded-t-3xl md:rounded-2xl bg-[#131926] border border-[#1F2937] shadow-2xl"
+            className="w-full md:max-w-2xl max-h-[90vh] overflow-y-auto rounded-t-3xl md:rounded-2xl bg-[#070B12]/95 backdrop-blur-2xl border border-emerald-500/25 shadow-[0_0_40px_-10px_rgba(0,255,133,0.22)]"
             initial={{ y: 48, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 48, opacity: 0 }}
@@ -175,7 +175,7 @@ export function MatchDetailDrawer({ matchId, couponPick, onClose }: Props) {
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 bg-[#131926]/95 backdrop-blur border-b border-[#1F2937]">
+            <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 bg-[#070B12]/95 backdrop-blur-xl border-b border-emerald-500/15">
               <div className="min-w-0">
                 <p className="text-[11px] font-medium text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
                   {detail && <LeagueBadge name={detail.league} logoUrl={detail.league_logo_url} />}

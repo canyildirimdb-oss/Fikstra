@@ -1,15 +1,18 @@
 import json
+import threading
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
 from app.database import get_db
 from app.models import (
     Coupon,
+    CouponItem,
     Match,
     MatchContext,
     OddsCurrent,
@@ -25,6 +28,34 @@ from services.sync import is_sync_running, run_sync_pipeline
 from utils.time_utils import is_tr_today_or_next_24h, to_tr_datetime, tr_today_str
 
 router = APIRouter(prefix="/api", tags=["api"])
+
+API_CACHE_TTL_SEC = 60.0
+_API_CACHE: dict[str, tuple[float, Any]] = {}
+_API_CACHE_LOCK = threading.Lock()
+
+
+def clear_api_cache() -> None:
+    with _API_CACHE_LOCK:
+        _API_CACHE.clear()
+
+
+def _cache_get(key: str) -> Any:
+    now = time.monotonic()
+    with _API_CACHE_LOCK:
+        entry = _API_CACHE.get(key)
+        if not entry:
+            return None
+        exp, val = entry
+        if now > exp:
+            _API_CACHE.pop(key, None)
+            return None
+        return val
+
+
+def _cache_set(key: str, val: Any, ttl: float = API_CACHE_TTL_SEC) -> Any:
+    with _API_CACHE_LOCK:
+        _API_CACHE[key] = (time.monotonic() + ttl, val)
+    return val
 
 
 def _serialize_ctx(ctx: Optional[MatchContext], expected_pick: Optional[str] = None) -> dict:
@@ -99,6 +130,10 @@ def _match_time_info(dt_utc: datetime) -> dict:
 
 @router.get("/dashboard/summary")
 def get_dashboard_summary(db: Session = Depends(get_db)):
+    cached = _cache_get("dashboard_summary")
+    if cached is not None:
+        return cached
+
     last_sync = (
         db.query(SyncLog)
         .filter(SyncLog.status == "SUCCESS")
@@ -116,17 +151,27 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
         minutes_ago = max(0, int((datetime.now(timezone.utc) - fin).total_seconds() // 60))
         last_sync_iso = fin.isoformat()
 
-    settled_preds = (
+    settled_raw = (
         db.query(Prediction)
-        .filter(Prediction.status.in_(["WON", "LOST"]))
+        .filter(Prediction.status.in_(["WON", "LOST"]), Prediction.is_top_pick.is_(True))
+        .order_by(Prediction.settled_at.desc(), Prediction.confidence_score.desc())
         .all()
     )
+    seen_settled_matches: set[int] = set()
+    settled_preds: list[Prediction] = []
+    for p in settled_raw:
+        if p.match_id in seen_settled_matches:
+            continue
+        seen_settled_matches.add(p.match_id)
+        settled_preds.append(p)
+
     won_cnt = sum(1 for p in settled_preds if p.status == "WON")
     win_rate = round((won_cnt / len(settled_preds)) * 100.0, 1) if settled_preds else None
 
     kickoff_lock = datetime.now(timezone.utc) + timedelta(minutes=5)
     pending = (
         db.query(Prediction)
+        .options(joinedload(Prediction.match))
         .join(Match, Prediction.match_id == Match.id)
         .filter(
             Match.status == "SCHEDULED",
@@ -184,16 +229,19 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
             "odds_drop_pct": p.odds_drop_pct,
         }
 
-    return {
-        "last_sync_at": last_sync_iso,
-        "minutes_ago": minutes_ago,
-        "overall_win_rate": win_rate,
-        "settled_total": len(settled_preds),
-        "active_matches_count": db.query(Match).filter(Match.status == "SCHEDULED").count(),
-        "top_confidence": _mini(top_conf),
-        "best_value": _mini(best_val),
-        "sharpest_drop": _mini(sharpest_drop),
-    }
+    return _cache_set(
+        "dashboard_summary",
+        {
+            "last_sync_at": last_sync_iso,
+            "minutes_ago": minutes_ago,
+            "overall_win_rate": win_rate,
+            "settled_total": len(settled_preds),
+            "active_matches_count": db.query(Match).filter(Match.status == "SCHEDULED").count(),
+            "top_confidence": _mini(top_conf),
+            "best_value": _mini(best_val),
+            "sharpest_drop": _mini(sharpest_drop),
+        },
+    )
 
 
 @router.get("/predictions")
@@ -207,9 +255,15 @@ def get_predictions(
     limit: int = Query(default=60, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
+    cache_key = f"predictions:{today_only}:{major_only}:{min_odd}:{min_confidence}:{market or ''}:{(search or '').strip().lower()}:{limit}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     kickoff_lock = datetime.now(timezone.utc) + timedelta(minutes=5)
     q = (
         db.query(Prediction)
+        .options(joinedload(Prediction.match).joinedload(Match.context))
         .join(Match, Prediction.match_id == Match.id)
         .filter(
             Match.status == "SCHEDULED",
@@ -229,7 +283,7 @@ def get_predictions(
 
     search_low = (search or "").strip().lower()
     seen_matches: set[int] = set()
-    items: list[dict] = []
+    selected_preds: list[Prediction] = []
 
     for p in preds:
         m = p.match
@@ -245,18 +299,23 @@ def get_predictions(
         if m.id in seen_matches:
             continue
         seen_matches.add(m.id)
+        selected_preds.append(p)
+        if len(selected_preds) >= limit:
+            break
 
+    # Batch-load OddsCurrent to avoid N+1 queries
+    match_ids = [p.match_id for p in selected_preds]
+    odds_map: dict[tuple[int, str, str], OddsCurrent] = {}
+    if match_ids:
+        for o in db.query(OddsCurrent).filter(OddsCurrent.match_id.in_(match_ids)).all():
+            odds_map[(o.match_id, o.market_key, o.selection_key)] = o
+
+    items: list[dict] = []
+    for p in selected_preds:
+        m = p.match
         bd = json.loads(p.score_breakdown_json) if p.score_breakdown_json else {}
         ctx_data = _serialize_ctx(m.context)
-        curr_odd_row = (
-            db.query(OddsCurrent)
-            .filter(
-                OddsCurrent.match_id == m.id,
-                OddsCurrent.market_key == p.market_key,
-                OddsCurrent.selection_key == p.selection_key,
-            )
-            .first()
-        )
+        curr_odd_row = odds_map.get((m.id, p.market_key, p.selection_key))
 
         items.append({
             "prediction_id": p.id,
@@ -285,13 +344,12 @@ def get_predictions(
             "away_form": ctx_data["away_form"],
             "injuries_count": len(ctx_data["injuries"]["home"]) + len(ctx_data["injuries"]["away"]),
         })
-        if len(items) >= limit:
-            break
 
-    return {"count": len(items), "items": items}
+    return _cache_set(cache_key, {"count": len(items), "items": items})
 
 
 @router.get("/matches")
+@router.get("/bulletin")
 def get_matches_bulletin(
     today_only: bool = Query(default=False),
     major_only: bool = Query(default=False),
@@ -300,14 +358,18 @@ def get_matches_bulletin(
     search: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
 ):
+    cache_key = f"bulletin:{today_only}:{major_only}:{min_odd}:{market}:{(search or '').strip().lower()}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     q = db.query(Match).filter(Match.status.in_(["SCHEDULED", "LIVE"]))
     if major_only:
         q = q.filter(Match.is_major_league.is_(True))
     matches = q.order_by(Match.is_major_league.desc(), Match.start_time_utc.asc()).all()
 
     search_low = (search or "").strip().lower()
-    grouped: dict[str, list[dict]] = defaultdict(list)
-
+    filtered_matches: list[Match] = []
     for m in matches:
         if today_only and not is_tr_today_or_next_24h(m.start_time_utc):
             continue
@@ -317,23 +379,35 @@ def get_matches_bulletin(
             and search_low not in m.league.lower()
         ):
             continue
+        filtered_matches.append(m)
 
-        odds_rows = (
+    match_ids = [m.id for m in filtered_matches]
+    odds_by_match: dict[int, list[OddsCurrent]] = defaultdict(list)
+    top_conf_by_match: dict[int, float] = {}
+    if match_ids:
+        for o in (
             db.query(OddsCurrent)
-            .filter(OddsCurrent.match_id == m.id, OddsCurrent.market_key == market)
+            .filter(OddsCurrent.match_id.in_(match_ids), OddsCurrent.market_key == market)
             .all()
-        )
+        ):
+            odds_by_match[o.match_id].append(o)
+
+        for p in (
+            db.query(Prediction.match_id, Prediction.confidence_score)
+            .filter(Prediction.match_id.in_(match_ids), Prediction.status == "PENDING")
+            .all()
+        ):
+            prev = top_conf_by_match.get(p.match_id)
+            if prev is None or p.confidence_score > prev:
+                top_conf_by_match[p.match_id] = p.confidence_score
+
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for m in filtered_matches:
+        odds_rows = odds_by_match.get(m.id, [])
         if not odds_rows:
             continue
         if min_odd > 1.01 and not any(o.iddaa_odd >= min_odd for o in odds_rows):
             continue
-
-        top_pred = (
-            db.query(Prediction)
-            .filter(Prediction.match_id == m.id, Prediction.status == "PENDING")
-            .order_by(Prediction.confidence_score.desc())
-            .first()
-        )
 
         grouped[m.league].append({
             "match_id": m.id,
@@ -348,7 +422,7 @@ def get_matches_bulletin(
             "home_score": m.home_score,
             "away_score": m.away_score,
             **_match_time_info(m.start_time_utc),
-            "top_confidence": top_pred.confidence_score if top_pred else None,
+            "top_confidence": top_conf_by_match.get(m.id),
             "odds": [
                 {
                     "market_key": o.market_key,
@@ -362,7 +436,7 @@ def get_matches_bulletin(
         })
 
     leagues_list = [{"league": lg, "matches": ms} for lg, ms in grouped.items()]
-    return {"leagues_count": len(leagues_list), "leagues": leagues_list}
+    return _cache_set(cache_key, {"leagues_count": len(leagues_list), "leagues": leagues_list})
 
 
 @router.get("/matches/{match_id}")
@@ -516,15 +590,26 @@ def trigger_manual_refresh(
 
 @router.get("/coupons")
 def get_coupons(db: Session = Depends(get_db)):
+    cached = _cache_get("coupons")
+    if cached is not None:
+        return cached
+
     today_str = tr_today_str()
     coupons = (
         db.query(Coupon)
+        .options(joinedload(Coupon.items).joinedload(CouponItem.prediction).joinedload(Prediction.match))
         .filter(Coupon.coupon_date == today_str)
         .order_by(Coupon.id.asc())
         .all()
     )
     if not coupons:
-        coupons = db.query(Coupon).order_by(Coupon.coupon_date.desc(), Coupon.id.asc()).limit(3).all()
+        coupons = (
+            db.query(Coupon)
+            .options(joinedload(Coupon.items).joinedload(CouponItem.prediction).joinedload(Prediction.match))
+            .order_by(Coupon.coupon_date.desc(), Coupon.id.asc())
+            .limit(3)
+            .all()
+        )
 
     out = []
     for c in coupons:
@@ -556,18 +641,31 @@ def get_coupons(db: Session = Depends(get_db)):
                 for item in c.items
             ],
         })
-    return {"coupons": out}
+    return _cache_set("coupons", {"coupons": out})
 
 
 @router.get("/performance")
 def get_performance(db: Session = Depends(get_db)):
-    settled = (
+    cached = _cache_get("performance")
+    if cached is not None:
+        return cached
+
+    settled_raw = (
         db.query(Prediction)
+        .options(joinedload(Prediction.match))
         .join(Match, Prediction.match_id == Match.id)
-        .filter(Prediction.status.in_(["WON", "LOST"]))
-        .order_by(Prediction.settled_at.desc())
+        .filter(Prediction.status.in_(["WON", "LOST"]), Prediction.is_top_pick.is_(True))
+        .order_by(Prediction.settled_at.desc(), Prediction.confidence_score.desc())
         .all()
     )
+    # Hard guard: at most 1 official settled row per finished match
+    seen_match_ids: set[int] = set()
+    settled: list[Prediction] = []
+    for p in settled_raw:
+        if p.match_id in seen_match_ids:
+            continue
+        seen_match_ids.add(p.match_id)
+        settled.append(p)
     won = sum(1 for p in settled if p.status == "WON")
     total = len(settled)
     win_rate = round((won / total) * 100.0, 1) if total else None
@@ -655,15 +753,18 @@ def get_performance(db: Session = Depends(get_db)):
         for p in settled[:50]
     ]
 
-    return {
-        "overall_win_rate": win_rate,
-        "won_count": won,
-        "lost_count": total - won,
-        "total_settled": total,
-        "avg_clv_pct": avg_clv_pct,
-        "brier_score": brier_score,
-        "calibration_bands": calibration_bands,
-        "trend": trend,
-        "coupon_tiers": tier_stats,
-        "archive": archive,
-    }
+    return _cache_set(
+        "performance",
+        {
+            "overall_win_rate": win_rate,
+            "won_count": won,
+            "lost_count": total - won,
+            "total_settled": total,
+            "avg_clv_pct": avg_clv_pct,
+            "brier_score": brier_score,
+            "calibration_bands": calibration_bands,
+            "trend": trend,
+            "coupon_tiers": tier_stats,
+            "archive": archive,
+        },
+    )

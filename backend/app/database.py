@@ -68,6 +68,7 @@ def ensure_schema():
             ("clv_pct", "FLOAT"),
             ("kelly_units", "FLOAT"),
             ("trap_warning", "BOOLEAN DEFAULT FALSE"),
+            ("is_top_pick", "BOOLEAN DEFAULT FALSE"),
         ],
         "coupons": [
             ("is_locked", "BOOLEAN DEFAULT FALSE"),
@@ -84,6 +85,30 @@ def ensure_schema():
                 sql_type = "TIMESTAMPTZ" if (is_pg and col_type == "TIMESTAMP") else col_type
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN {col_name} {sql_type}"))
+
+    # Performance indexes (PostgreSQL & SQLite compatible)
+    index_stmts = [
+        "CREATE INDEX IF NOT EXISTS ix_matches_start_time_utc ON matches (start_time_utc)",
+        "CREATE INDEX IF NOT EXISTS ix_predictions_match_id ON predictions (match_id)",
+        "CREATE INDEX IF NOT EXISTS ix_predictions_status_top ON predictions (status, is_top_pick)",
+        "CREATE INDEX IF NOT EXISTS ix_odds_history_match_recorded ON odds_history (match_id, recorded_at)",
+        "CREATE INDEX IF NOT EXISTS ix_coupons_coupon_date ON coupons (coupon_date)",
+    ]
+    with engine.begin() as conn:
+        for stmt in index_stmts:
+            conn.execute(text(stmt))
+
+    # Clean up any legacy multi-market settled predictions (keep 1 official #1 per match)
+    try:
+        from services.settlement import cleanup_multi_market_settled_predictions
+
+        db = SessionLocal()
+        try:
+            cleanup_multi_market_settled_predictions(db)
+        finally:
+            db.close()
+    except Exception:
+        pass
 
 
 def get_db():

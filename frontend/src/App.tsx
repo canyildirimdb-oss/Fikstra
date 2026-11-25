@@ -8,6 +8,7 @@ import {
   ListFilter,
   RefreshCw,
   Share2,
+  Ticket,
 } from "lucide-react";
 import { api } from "./api/client";
 import { formatMarketLabel } from "./utils/format";
@@ -135,34 +136,36 @@ export function App() {
   const customTotalOdd = slipItems.reduce((acc, x) => acc * x.iddaa_odd, 1);
 
   return (
-    <div className="min-h-screen bg-[#090D16] text-slate-100 pb-28 md:pb-14">
-      {/* Glassmorphic Top Header */}
-      <header className="sticky top-0 z-30 bg-[#090D16]/85 backdrop-blur-xl border-b border-[#1F2937]">
-        <div className="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <img
-              src="/icon.svg"
-              alt="Fikstra"
-              className="w-8 h-8 rounded-xl shadow-lg shadow-emerald-500/20"
-            />
+    <div className="min-h-screen text-slate-100 pb-28 md:pb-14">
+      {/* Glassmorphic Neon Emerald Top Header */}
+      <header className="sticky top-0 z-30 bg-[#05080D]/80 backdrop-blur-xl border-b border-emerald-500/15">
+        <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            {/* Geometric F. Logo in Neon Emerald Glowing Dark Square */}
+            <div className="w-9 h-9 rounded-xl bg-[#0B111C] border border-[#00FF85]/50 shadow-[0_0_18px_-3px_rgba(0,255,133,0.45)] flex items-center justify-center shrink-0">
+              <svg viewBox="0 0 32 32" className="w-5 h-5" fill="none">
+                <path
+                  d="M8 7H22M8 7V25M8 15.5H19"
+                  stroke="#00FF85"
+                  strokeWidth="3.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <circle cx="22.5" cy="23.5" r="2.3" fill="#00FF85" />
+              </svg>
+            </div>
             <div>
-              <h1 className="text-sm font-extrabold tracking-tight text-white leading-none">
+              <h1 className="text-base font-extrabold tracking-tight text-white leading-none">
                 Fikstra
               </h1>
-              <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span className="text-[10px] text-slate-400 mono-nums">
-                  7/24 Aktif •{" "}
-                  {summary?.minutes_ago !== null && summary?.minutes_ago !== undefined
-                    ? `${summary.minutes_ago} dk önce`
-                    : "Canlı"}
-                </span>
-              </div>
+              <p className="text-[11px] text-emerald-300/80 font-medium mt-1 leading-none">
+                Veriyle Okunan Maçlar
+              </p>
             </div>
           </div>
 
           {/* Desktop Navigation */}
-          <nav className="hidden md:flex items-center gap-1 bg-[#131926] p-1 rounded-xl border border-[#1F2937]">
+          <nav className="hidden md:flex items-center gap-1 glass-card p-1 rounded-xl">
             {TABS.map((t) => {
               const Icon = t.icon;
               const active = tab === t.key;
@@ -170,44 +173,49 @@ export function App() {
                 <button
                   key={t.key}
                   onClick={() => setTab(t.key)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                  className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                     active
-                      ? "bg-emerald-500/15 text-emerald-400"
+                      ? "bg-[#00FF85]/15 text-[#00FF85]"
                       : "text-slate-400 hover:text-slate-200"
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5" />
                   {t.label}
+                  {active && (
+                    <span className="absolute inset-x-3 -bottom-1 h-[2px] rounded-full bg-[#00FF85] shadow-[0_0_8px_#00FF85]" />
+                  )}
                 </button>
               );
             })}
           </nav>
 
-          {/* Actions */}
+          {/* Circular Dark Glass Actions */}
           <div className="flex items-center gap-2">
             <button
               onClick={handleEnablePush}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition-colors ${
+              className={`relative w-9 h-9 rounded-full glass-card flex items-center justify-center transition-all ${
                 pushStatus === "enabled"
-                  ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-400"
-                  : "bg-[#131926] border-[#1F2937] text-slate-300 hover:border-cyan-500/40"
+                  ? "border-[#00FF85]/55 text-[#00FF85] shadow-[0_0_12px_-3px_rgba(0,255,133,0.45)]"
+                  : "text-slate-300 hover:border-[#00FF85]/40 hover:text-white"
               }`}
               title="Bildirimleri Aç"
             >
               {pushStatus === "enabled" ? (
-                <BellRing className="w-3.5 h-3.5" />
+                <BellRing className="w-4 h-4" />
               ) : (
-                <Bell className="w-3.5 h-3.5" />
+                <Bell className="w-4 h-4" />
               )}
-              <span className="hidden sm:inline">Bildirim</span>
+              {pushStatus === "enabled" && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[#00FF85] shadow-[0_0_6px_#00FF85]" />
+              )}
             </button>
             <button
               onClick={handleManualRefresh}
               disabled={refreshing}
-              className="p-2 rounded-xl bg-[#131926] border border-[#1F2937] text-slate-300 hover:text-white disabled:opacity-60"
+              className="w-9 h-9 rounded-full glass-card flex items-center justify-center text-slate-300 hover:text-[#00FF85] hover:border-[#00FF85]/40 disabled:opacity-60 transition-all"
               title="Yenile"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+              <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin text-[#00FF85]" : ""}`} />
             </button>
           </div>
         </div>
@@ -252,15 +260,15 @@ export function App() {
         {tab === "performance" && <PerformancePage refreshTrigger={refreshTrigger} />}
       </main>
 
-      {/* Bottom Kuponum Fişi Bar (when not on Coupons tab) */}
+      {/* Desktop Floating Kuponum Fişi Bar (when not on Coupons tab) */}
       {slipItems.length > 0 && tab !== "coupons" && (
-        <div className="fixed bottom-16 md:bottom-4 inset-x-0 z-30 px-4 pointer-events-none">
-          <div className="max-w-3xl mx-auto pointer-events-auto p-3 rounded-2xl bg-[#0D1424]/95 backdrop-blur-xl border border-emerald-500/40 shadow-2xl shadow-emerald-500/15 flex items-center justify-between gap-3">
+        <div className="hidden md:block fixed bottom-4 inset-x-0 z-30 px-4 pointer-events-none">
+          <div className="max-w-3xl mx-auto pointer-events-auto p-3 rounded-2xl bg-[#080E18]/95 backdrop-blur-xl border border-[#00FF85]/45 shadow-2xl shadow-[#00FF85]/15 flex items-center justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 text-xs font-bold text-emerald-400">
-                <Layers className="w-3.5 h-3.5 shrink-0" />
+              <div className="flex items-center gap-2 text-xs font-bold text-[#00FF85]">
+                <Ticket className="w-3.5 h-3.5 shrink-0" />
                 <span>Kuponum Fişi ({slipItems.length} Maç)</span>
-                <span className="mono-nums px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300">
+                <span className="mono-nums px-2 py-0.5 rounded-md bg-[#00FF85]/20 text-[#00FF85]">
                   {customTotalOdd.toFixed(2)} Oran
                 </span>
               </div>
@@ -298,14 +306,14 @@ export function App() {
                     textPayload,
                   });
                 }}
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold"
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#00FF85] hover:bg-emerald-400 text-[#05080D] text-xs font-bold"
               >
                 <Share2 className="w-3.5 h-3.5" />
                 Kuponu Paylaş
               </button>
               <button
                 onClick={() => setTab("coupons")}
-                className="px-2.5 py-1.5 rounded-xl bg-[#131926] border border-[#1F2937] text-xs font-semibold text-slate-200 hover:border-emerald-500/40"
+                className="px-2.5 py-1.5 rounded-xl glass-card text-xs font-semibold text-slate-200 hover:border-[#00FF85]/45"
               >
                 Fişi Aç
               </button>
@@ -314,22 +322,66 @@ export function App() {
         </div>
       )}
 
-      {/* Mobile Fixed Bottom Navigation */}
-      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-[#090D16]/95 backdrop-blur-xl border-t border-[#1F2937] px-2 py-1.5">
-        <div className="grid grid-cols-4 gap-1">
-          {TABS.map((t) => {
+      {/* Mobile Floating Bottom Navigation Dock with Elevated Center Kuponum Fişi Button */}
+      <nav className="md:hidden fixed bottom-3 inset-x-3 z-40">
+        <div className="relative rounded-2xl bg-[#080E18]/90 backdrop-blur-2xl border border-emerald-500/20 shadow-[0_12px_35px_-10px_rgba(0,0,0,0.85)] px-2 py-1.5 grid grid-cols-5 items-center">
+          {(["highlights", "coupons"] as TabKey[]).map((key) => {
+            const t = TABS.find((x) => x.key === key)!;
             const Icon = t.icon;
             const active = tab === t.key;
             return (
               <button
                 key={t.key}
                 onClick={() => setTab(t.key)}
-                className={`flex flex-col items-center justify-center py-1.5 rounded-xl transition-colors ${
-                  active ? "text-emerald-400 bg-emerald-500/10" : "text-slate-400"
+                className={`relative flex flex-col items-center justify-center py-1.5 rounded-xl transition-colors ${
+                  active ? "text-[#00FF85]" : "text-slate-400"
                 }`}
               >
                 <Icon className="w-4 h-4" />
-                <span className="text-[10px] font-semibold mt-0.5">{t.label}</span>
+                <span className="text-[10px] font-semibold mt-0.5 truncate">{t.label}</span>
+                {active && (
+                  <span className="absolute bottom-0.5 w-6 h-[2.5px] rounded-full bg-[#00FF85] shadow-[0_0_8px_#00FF85]" />
+                )}
+              </button>
+            );
+          })}
+
+          {/* Elevated Center Neon Green Kuponum Fişi Button */}
+          <div className="flex justify-center">
+            <button
+              onClick={() => {
+                setTab("coupons");
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+              className="relative -mt-6 w-13 h-13 rounded-full bg-[#00FF85] text-[#05080D] flex items-center justify-center shadow-[0_0_24px_rgba(0,255,133,0.6)] border-4 border-[#05080D] active:scale-95 transition-transform"
+              title="Kuponum Fişi"
+            >
+              <Ticket className="w-5 h-5 stroke-[2.4]" />
+              {slipItems.length > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1 rounded-full bg-[#05080D] border border-[#00FF85] text-[#00FF85] text-[10px] font-extrabold mono-nums flex items-center justify-center shadow">
+                  {slipItems.length}
+                </span>
+              )}
+            </button>
+          </div>
+
+          {(["bulletin", "performance"] as TabKey[]).map((key) => {
+            const t = TABS.find((x) => x.key === key)!;
+            const Icon = t.icon;
+            const active = tab === t.key;
+            return (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={`relative flex flex-col items-center justify-center py-1.5 rounded-xl transition-colors ${
+                  active ? "text-[#00FF85]" : "text-slate-400"
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                <span className="text-[10px] font-semibold mt-0.5 truncate">{t.label}</span>
+                {active && (
+                  <span className="absolute bottom-0.5 w-6 h-[2.5px] rounded-full bg-[#00FF85] shadow-[0_0_8px_#00FF85]" />
+                )}
               </button>
             );
           })}

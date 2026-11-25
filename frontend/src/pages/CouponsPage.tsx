@@ -89,10 +89,10 @@ export function CouponsPage({
     <div className="space-y-5">
       {/* Custom User Slip */}
       {slipItems.length > 0 && (
-        <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-500/10 to-[#131926] border border-emerald-500/35 space-y-3">
+        <div className="p-4 rounded-2xl glass-card border-[#00FF85]/40 neon-bottom-glow space-y-3">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-sm font-bold text-emerald-300">Kendi Özel Kuponum</h3>
+              <h3 className="text-sm font-bold text-[#00FF85]">Kendi Özel Kuponum</h3>
               <p className="text-[11px] text-slate-400">
                 {slipItems.length} maç seçildi • Toplam Oran:{" "}
                 <span className="font-extrabold text-white mono-nums">
@@ -103,14 +103,14 @@ export function CouponsPage({
             <div className="flex items-center gap-2">
               <button
                 onClick={openCustomShare}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#00FF85] hover:bg-emerald-400 text-[#05080D] text-xs font-bold shadow-[0_0_16px_-4px_rgba(0,255,133,0.6)]"
               >
                 <Share2 className="w-3.5 h-3.5" />
                 Kuponu Paylaş
               </button>
               <button
                 onClick={onClearSlip}
-                className="p-2 rounded-xl bg-[#0B0F17] border border-[#1F2937] text-slate-400 hover:text-rose-400"
+                className="p-2 rounded-xl bg-[#05080D]/80 border border-white/10 text-slate-400 hover:text-rose-400"
               >
                 <Trash2 className="w-4 h-4" />
               </button>
@@ -121,7 +121,7 @@ export function CouponsPage({
             {slipItems.map((s) => (
               <div
                 key={s.match_id}
-                className="flex items-center justify-between px-3 py-2 rounded-xl bg-[#0B0F17] border border-[#1F2937] text-xs"
+                className="flex items-center justify-between px-3 py-2 rounded-xl bg-[#05080D]/75 border border-white/10 text-xs"
               >
                 <span className="text-slate-200 truncate">
                   {s.home_team} - {s.away_team}
@@ -162,7 +162,7 @@ export function CouponsPage({
               return (
                 <div
                   key={tierKey}
-                  className="flex flex-col justify-between p-4 rounded-2xl bg-[#131926] border border-[#1F2937] opacity-85"
+                  className="flex flex-col justify-between p-4 rounded-2xl glass-card opacity-85"
                 >
                   <div>
                     <span
@@ -198,7 +198,7 @@ export function CouponsPage({
             return (
               <div
                 key={c.id}
-                className="flex flex-col justify-between p-4 rounded-2xl bg-[#131926] border border-[#1F2937]"
+                className="flex flex-col justify-between p-4 rounded-2xl glass-card neon-bottom-glow"
               >
                 <div>
                   <div className="flex items-start justify-between gap-2 mb-3">

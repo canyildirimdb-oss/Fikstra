@@ -166,6 +166,7 @@ class Prediction(Base):
     clv_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     kelly_units: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     trap_warning: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_top_pick: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     status: Mapped[str] = mapped_column(String(24), default="PENDING", index=True)
     settled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

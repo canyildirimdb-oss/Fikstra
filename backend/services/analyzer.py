@@ -267,7 +267,7 @@ def _compute_value_component(
         overround = sum(1.0 / i for i in iddaa_group) if len(iddaa_group) >= 2 else 1.10
         true_prob = (1.0 / odd.iddaa_odd) / overround if overround > 0 else (1.0 / odd.iddaa_odd)
 
-    prob_pts = min(20.0, true_prob * 26.0)
+    prob_pts = min(16.5, true_prob * 23.0)
     value_edge_pct: Optional[float] = None
     poisson_edge_pct: Optional[float] = None
     conflict_flag = False
@@ -284,20 +284,47 @@ def _compute_value_component(
         else:
             edge_pts = 1.5
     else:
-        edge_pts = min(11.5, true_prob * 15.0)
+        # Neutral baseline when global odds are unavailable (avoid rewarding low odds twice)
+        edge_pts = min(8.5, 4.5 + true_prob * 5.0)
 
+    model_market_edge = 0.0
     if poisson_prob is not None:
+        model_market_edge = poisson_prob - true_prob
         raw_edge = (poisson_prob * odd.iddaa_odd - 1.0) * 100.0
-        if abs(poisson_prob - true_prob) > 0.18:
+        if abs(model_market_edge) > 0.18:
             conflict_flag = True
             poisson_edge_pct = 0.0
         else:
             capped_edge = min(12.0, raw_edge)
             poisson_edge_pct = round(capped_edge, 2)
-            if capped_edge > 0:
-                edge_pts = min(15.0, edge_pts + min(2.5, capped_edge * 0.2))
+            if model_market_edge > 0.015:
+                edge_pts = min(16.0, edge_pts + min(4.0, model_market_edge * 45.0))
+            elif capped_edge > 0:
+                edge_pts = min(15.0, edge_pts + min(2.0, capped_edge * 0.15))
 
-    return round(min(35.0, prob_pts + edge_pts), 1), round(true_prob, 4), value_edge_pct, poisson_edge_pct, conflict_flag
+    # Brake raw-probability inflation on very low-odd markets (< 1.38, e.g. AU_35:ALT, AU_15:UST)
+    # unless backed by a genuine strong positive edge (Model Prob - Market Prob >= 4% or global >= +3%)
+    low_odd_penalty = 0.0
+    is_low_odd_trap_market = odd.iddaa_odd < 1.38 or (
+        (odd.market_key == "AU_35" and odd.selection_key == "ALT")
+        or (odd.market_key == "AU_15" and odd.selection_key == "UST")
+    ) and odd.iddaa_odd < 1.42
+    if is_low_odd_trap_market:
+        has_strong_edge = (model_market_edge >= 0.04) or (value_edge_pct is not None and value_edge_pct >= 3.0)
+        if not has_strong_edge:
+            low_odd_penalty = 5.5 if model_market_edge < 0.02 else 3.0
+
+    # Value weight boost for balanced core markets (MS, KG, AU_25, CS) with genuine positive edge
+    if (
+        not conflict_flag
+        and odd.market_key in ("MS", "KG", "AU_25", "CS")
+        and odd.iddaa_odd >= 1.40
+        and (model_market_edge >= 0.025 or (value_edge_pct is not None and value_edge_pct >= 0.5))
+    ):
+        edge_pts = min(16.5, edge_pts + 2.0)
+
+    total_val = max(4.0, min(35.0, prob_pts + edge_pts - low_odd_penalty))
+    return round(total_val, 1), round(true_prob, 4), value_edge_pct, poisson_edge_pct, conflict_flag
 
 
 def _compute_smart_money_and_trap(
@@ -311,20 +338,21 @@ def _compute_smart_money_and_trap(
     """
     drop_pct = ((odd.opening_odd - odd.iddaa_odd) / odd.opening_odd) * 100.0 if odd.opening_odd > 1.0 else 0.0
 
-    # 3-hour velocity
+    # 3-hour velocity (only when >= 2 history snapshots exist)
     vel_3h_pct = 0.0
     h_list = hist_by_key.get((odd.market_key, odd.selection_key)) or []
-    cutoff_3h = now - timedelta(hours=3)
-    ref_odd = None
-    for h in h_list:
-        rec = h.recorded_at.replace(tzinfo=timezone.utc) if h.recorded_at.tzinfo is None else h.recorded_at
-        if rec <= cutoff_3h:
-            ref_odd = h.iddaa_odd
-        elif ref_odd is None:
-            ref_odd = h.iddaa_odd
-            break
-    if ref_odd and ref_odd > 1.0:
-        vel_3h_pct = ((ref_odd - odd.iddaa_odd) / ref_odd) * 100.0
+    if len(h_list) >= 2:
+        cutoff_3h = now - timedelta(hours=3)
+        ref_odd = None
+        for h in h_list:
+            rec = h.recorded_at.replace(tzinfo=timezone.utc) if h.recorded_at.tzinfo is None else h.recorded_at
+            if rec <= cutoff_3h:
+                ref_odd = h.iddaa_odd
+            elif ref_odd is None:
+                ref_odd = h.iddaa_odd
+                break
+        if ref_odd and ref_odd > 1.0:
+            vel_3h_pct = ((ref_odd - odd.iddaa_odd) / ref_odd) * 100.0
 
     # Cross-market confirmation
     confirm_pairs = {
@@ -349,18 +377,21 @@ def _compute_smart_money_and_trap(
         trap_warning = True
         trap_reason = "Oranda %5+ tersine yükseliş (Tuzak Şüphesi)"
 
-    if drop_pct >= 7.0:
+    # Neutral baseline when odds_history is empty (day-1 on fresh DB) and no real drop/rise yet
+    if len(h_list) == 0 and abs(drop_pct) < 2.0:
+        score = 14.5
+    elif drop_pct >= 7.0:
         score = 25.0
     elif drop_pct >= 4.0:
         score = 21.0 + min(4.0, (drop_pct - 4.0) * 1.2)
     elif drop_pct > 0.2:
-        score = 13.0 + drop_pct * 2.0
+        score = 14.0 + drop_pct * 1.8
     elif drop_pct <= -6.0:
         score = 4.0
     elif drop_pct < -0.2:
-        score = max(5.0, 13.0 + drop_pct * 1.5)
+        score = max(5.0, 13.5 + drop_pct * 1.5)
     else:
-        score = 13.0
+        score = 14.5
 
     if smart_money:
         score = min(25.0, score + 4.0)
@@ -397,7 +428,7 @@ def _compute_form_goals_component(
     else:
         form_pts = 7.5
 
-    model_pts = min(13.0, blended_prob * 16.5)
+    model_pts = min(13.0, 4.0 + blended_prob * 11.5)
     total = form_pts + model_pts
     if conflict_flag:
         total = max(6.0, total - 2.0)
@@ -691,6 +722,25 @@ def analyze_upcoming_matches(db: Session) -> int:
                 pred.kelly_units = kelly
                 pred.trap_warning = sm["trap_warning"]
                 updated_count += 1
+
+        # Mark exactly one official #1 top pick per match (frozen once match starts/settles)
+        pending_for_match = (
+            db.query(Prediction)
+            .filter(Prediction.match_id == match.id, Prediction.status == "PENDING")
+            .all()
+        )
+        if pending_for_match:
+            eligible_top = [p for p in pending_for_match if p.iddaa_odd < MAX_HIGHLIGHT_ODD] or pending_for_match
+            best_pred = max(
+                eligible_top,
+                key=lambda p: (
+                    p.confidence_score,
+                    p.value_edge_pct if p.value_edge_pct is not None else -99.0,
+                    p.iddaa_odd,
+                ),
+            )
+            for p in pending_for_match:
+                p.is_top_pick = (p.id == best_pred.id) if (p.id is not None and best_pred.id is not None) else (p is best_pred)
 
     db.commit()
     return updated_count
