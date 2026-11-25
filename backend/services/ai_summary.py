@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -9,9 +10,16 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import Match, MatchContext, Prediction
 
+logger = logging.getLogger(__name__)
+
 GEMINI_MODELS = [
-    "gemini-3.1-flash-lite",
-    "gemini-flash-latest",
+    "gemini-3.5-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+    "gemini-3-flash-preview",
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
 ]
 _LAST_GEMINI_CALL_TS = 0.0
 _MIN_INTERVAL_SEC = 4.2  # Free tier friendly (~14 RPM max)
@@ -46,6 +54,16 @@ def _build_rule_based_summary(
                 base += f" iddaa oranı global ortalamanın ({top_pred.global_odd:.2f}) %{diff:.1f} üzerinde değer sunuyor."
             else:
                 base += f" Global piyasa ortalaması {top_pred.global_odd:.2f} seviyesinde."
+        if top_pred.score_breakdown_json:
+            try:
+                bd = json.loads(top_pred.score_breakdown_json)
+                prob_pct = bd.get("blended_prob_pct") or bd.get("true_prob_pct")
+                if prob_pct is not None:
+                    base += f" Model olasılığı %{float(prob_pct):.0f} olarak hesaplandı."
+            except Exception:
+                pass
+        if top_pred.odds_drop_pct is not None and top_pred.odds_drop_pct >= 2.0:
+            base += f" Açılış oranına göre %{top_pred.odds_drop_pct:.1f} oran düşüşü dikkat çekiyor."
         parts.append(base)
 
     if ctx and (ctx.home_form or ctx.away_form):
@@ -160,18 +178,23 @@ def generate_match_summary(
                         ctx.ai_generated_at = datetime.now(timezone.utc)
                         db.commit()
                         return text, "gemini"
+                else:
+                    logger.warning(
+                        "[Fikstra AI] Gemini HTTP %s on model %s: %s",
+                        resp.status_code,
+                        model_name,
+                        resp.text[:200],
+                    )
                 gemini_failed = True
-            except Exception:
+            except Exception as exc:
+                logger.warning("[Fikstra AI] Gemini exception on model %s: %s", model_name, exc)
                 gemini_failed = True
                 continue
 
     if gemini_failed:
-        # Never cache transient 429 / quota / timeout failures in DB; retry on next open
+        # Never cache transient 429 / 503 / timeout failures in DB; retry on next open
         fallback_text = _build_rule_based_summary(match, top_pred, ctx)
-        transient_note = (
-            f"{fallback_text} (Not: Yapay zeka servisi şu an yoğun; bir sonraki açılışta yeniden denenecek.)"
-        )
-        return transient_note, "transient_error"
+        return fallback_text, "transient_error"
 
     fallback_text = _build_rule_based_summary(match, top_pred, ctx)
     ctx.ai_summary = fallback_text

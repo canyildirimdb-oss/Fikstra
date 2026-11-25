@@ -58,12 +58,12 @@ export function PerformancePage({ refreshTrigger }: Props) {
       {/* Top Metrics */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <div className="p-4 rounded-2xl glass-card neon-bottom-glow">
-          <p className="text-[11px] text-slate-400">Genel Tutturma</p>
+          <p className="text-[11px] text-slate-400">Başarı Oranımız</p>
           <p className="text-2xl font-extrabold mono-nums text-[#00FF85] mt-1">
             {data.overall_win_rate !== null ? `%${data.overall_win_rate}` : "—"}
           </p>
           <p className="text-[10px] text-slate-500 mt-0.5">
-            {data.won_count} Kazandı / {data.lost_count} Kaybetti
+            60+ Puan Resmi Tahminler • {data.won_count}K / {data.lost_count}M
           </p>
         </div>
 

@@ -457,9 +457,7 @@ export function MatchDetailDrawer({ matchId, couponPick, onClose }: Props) {
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300">
                           {detail.context.ai_source === "gemini"
                             ? "Fikstra AI"
-                            : detail.context.ai_source === "transient_error"
-                              ? "Geçici Yoğunluk"
-                              : "Veri Özeti"}
+                            : "Fikstra Analiz Özeti"}
                         </span>
                       )}
                     </div>

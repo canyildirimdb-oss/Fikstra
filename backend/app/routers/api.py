@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
@@ -153,7 +154,14 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
 
     settled_raw = (
         db.query(Prediction)
-        .filter(Prediction.status.in_(["WON", "LOST"]), Prediction.is_top_pick.is_(True))
+        .filter(
+            Prediction.status.in_(["WON", "LOST"]),
+            Prediction.is_top_pick.is_(True),
+            or_(
+                Prediction.confidence_score >= 60.0,
+                Prediction.id.in_(db.query(CouponItem.prediction_id)),
+            ),
+        )
         .order_by(Prediction.settled_at.desc(), Prediction.confidence_score.desc())
         .all()
     )
@@ -611,8 +619,40 @@ def get_coupons(db: Session = Depends(get_db)):
             .all()
         )
 
+    now_utc = datetime.now(timezone.utc)
     out = []
     for c in coupons:
+        items_out = []
+        for item in c.items:
+            p = item.prediction
+            m = p.match
+            m_start = m.start_time_utc.replace(tzinfo=timezone.utc) if m.start_time_utc.tzinfo is None else m.start_time_utc
+            if p.status in ("WON", "LOST", "VOID"):
+                leg_res = p.status
+            elif m.status == "LIVE" or (m.status == "SCHEDULED" and m_start <= now_utc):
+                leg_res = "LIVE"
+            else:
+                leg_res = "PENDING"
+            items_out.append({
+                "prediction_id": p.id,
+                "match_id": p.match_id,
+                "league": m.league,
+                "home_team": m.home_team,
+                "away_team": m.away_team,
+                "home_logo_url": m.home_logo_url,
+                "away_logo_url": m.away_logo_url,
+                "league_logo_url": m.league_logo_url,
+                "start_time_tr": to_tr_datetime(m.start_time_utc).strftime("%H:%M"),
+                "market_key": p.market_key,
+                "selection_key": p.selection_key,
+                "iddaa_odd": p.iddaa_odd,
+                "confidence_score": p.confidence_score,
+                "status": p.status,
+                "match_status": m.status,
+                "home_score": m.home_score,
+                "away_score": m.away_score,
+                "leg_result": leg_res,
+            })
         out.append({
             "id": c.id,
             "coupon_date": c.coupon_date,
@@ -621,25 +661,7 @@ def get_coupons(db: Session = Depends(get_db)):
             "avg_confidence": c.avg_confidence,
             "status": c.status,
             "is_locked": bool(c.is_locked),
-            "items": [
-                {
-                    "prediction_id": item.prediction.id,
-                    "match_id": item.prediction.match_id,
-                    "league": item.prediction.match.league,
-                    "home_team": item.prediction.match.home_team,
-                    "away_team": item.prediction.match.away_team,
-                    "home_logo_url": item.prediction.match.home_logo_url,
-                    "away_logo_url": item.prediction.match.away_logo_url,
-                    "league_logo_url": item.prediction.match.league_logo_url,
-                    "start_time_tr": to_tr_datetime(item.prediction.match.start_time_utc).strftime("%H:%M"),
-                    "market_key": item.prediction.market_key,
-                    "selection_key": item.prediction.selection_key,
-                    "iddaa_odd": item.prediction.iddaa_odd,
-                    "confidence_score": item.prediction.confidence_score,
-                    "status": item.prediction.status,
-                }
-                for item in c.items
-            ],
+            "items": items_out,
         })
     return _cache_set("coupons", {"coupons": out})
 
@@ -654,7 +676,14 @@ def get_performance(db: Session = Depends(get_db)):
         db.query(Prediction)
         .options(joinedload(Prediction.match))
         .join(Match, Prediction.match_id == Match.id)
-        .filter(Prediction.status.in_(["WON", "LOST"]), Prediction.is_top_pick.is_(True))
+        .filter(
+            Prediction.status.in_(["WON", "LOST"]),
+            Prediction.is_top_pick.is_(True),
+            or_(
+                Prediction.confidence_score >= 60.0,
+                Prediction.id.in_(db.query(CouponItem.prediction_id)),
+            ),
+        )
         .order_by(Prediction.settled_at.desc(), Prediction.confidence_score.desc())
         .all()
     )

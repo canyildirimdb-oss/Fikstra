@@ -182,6 +182,10 @@ export interface CouponItemData {
   iddaa_odd: number;
   confidence_score: number;
   status: string;
+  match_status?: string;
+  home_score?: number | null;
+  away_score?: number | null;
+  leg_result?: "WON" | "LOST" | "LIVE" | "PENDING" | "VOID";
 }
 
 export interface CouponData {
@@ -191,6 +195,7 @@ export interface CouponData {
   total_odd: number;
   avg_confidence: number;
   status: string;
+  is_locked?: boolean;
   items: CouponItemData[];
 }
 

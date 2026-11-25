@@ -253,10 +253,56 @@ def _compute_dixon_coles_probs(
     }
 
 
+def _is_sparse_data(ctx: Optional[MatchContext], odd: OddsCurrent) -> bool:
+    """True when match lacks rich stats (no form or no season/xG or no global odds)."""
+    has_form = bool(ctx and ctx.home_form and ctx.away_form)
+    has_season_or_xg = bool(
+        ctx and (
+            (ctx.season_home_gf is not None and ctx.season_away_gf is not None)
+            or (ctx.home_true_xg is not None and ctx.away_true_xg is not None)
+        )
+    )
+    has_global = bool(odd.global_avg_odd and odd.global_avg_odd > 1.0)
+    return (not has_form) or (not has_season_or_xg and not has_global)
+
+
+def _calibrate_market_prob(
+    market_key: str,
+    true_prob: float,
+    poisson_prob: Optional[float],
+    sparse_data: bool,
+) -> float:
+    """
+    Bayesian Market Calibration: anchor Dixon-Coles probabilities strongly to
+    de-vigged market probability so low-data matches cannot hallucinate huge edges.
+    - Sparse data: 75% Market + 25% Model
+    - Rich data (AU/KG/MS/CS): 60% Market + 40% Model
+    """
+    if poisson_prob is None:
+        return true_prob
+    if sparse_data:
+        return 0.75 * true_prob + 0.25 * poisson_prob
+    if market_key in ("AU_15", "AU_25", "AU_35", "KG", "MS", "CS"):
+        return 0.60 * true_prob + 0.40 * poisson_prob
+    return 0.65 * true_prob + 0.35 * poisson_prob
+
+
+def _is_high_risk_pick(market_key: str, selection_key: str, true_prob: float, iddaa_odd: float) -> bool:
+    """High-risk markets (MS X, 1.5 Alt, or market prob < 42% / odd > 2.35)."""
+    if market_key == "MS" and selection_key == "X":
+        return True
+    if market_key == "AU_15" and selection_key == "ALT":
+        return True
+    if true_prob < 0.42 or iddaa_odd > 2.35:
+        return True
+    return False
+
+
 def _compute_value_component(
     odd: OddsCurrent,
     market_odds: list[OddsCurrent],
-    poisson_prob: Optional[float],
+    calibrated_prob: Optional[float],
+    true_prob: Optional[float] = None,
 ) -> tuple[float, float, Optional[float], Optional[float], bool]:
     global_group = [o.global_avg_odd for o in market_odds if o.global_avg_odd and o.global_avg_odd > 1.0]
     if odd.global_avg_odd and len(global_group) >= 2:
@@ -287,39 +333,51 @@ def _compute_value_component(
         # Neutral baseline when global odds are unavailable (avoid rewarding low odds twice)
         edge_pts = min(8.5, 4.5 + true_prob * 5.0)
 
+    # Edge reward cap: (Calibrated Model Prob - Market Prob) capped at max +8% (+0.08)
     model_market_edge = 0.0
-    if poisson_prob is not None:
-        model_market_edge = poisson_prob - true_prob
-        raw_edge = (poisson_prob * odd.iddaa_odd - 1.0) * 100.0
-        if abs(model_market_edge) > 0.18:
+    if calibrated_prob is not None:
+        raw_mme = calibrated_prob - true_prob
+        model_market_edge = max(-0.08, min(0.08, raw_mme))
+        raw_edge = (calibrated_prob * odd.iddaa_odd - 1.0) * 100.0
+        if abs(raw_mme) > 0.14:
             conflict_flag = True
             poisson_edge_pct = 0.0
         else:
-            capped_edge = min(12.0, raw_edge)
+            capped_edge = min(8.0, raw_edge)
             poisson_edge_pct = round(capped_edge, 2)
-            if model_market_edge > 0.015:
-                edge_pts = min(16.0, edge_pts + min(4.0, model_market_edge * 45.0))
+            if model_market_edge > 0.01:
+                edge_pts = min(16.0, edge_pts + min(3.2, model_market_edge * 40.0))
             elif capped_edge > 0:
-                edge_pts = min(15.0, edge_pts + min(2.0, capped_edge * 0.15))
+                edge_pts = min(15.0, edge_pts + min(1.5, capped_edge * 0.18))
 
     # Brake raw-probability inflation on very low-odd markets (< 1.38, e.g. AU_35:ALT, AU_15:UST)
     # unless backed by a genuine strong positive edge (Model Prob - Market Prob >= 4% or global >= +3%)
     low_odd_penalty = 0.0
     is_low_odd_trap_market = odd.iddaa_odd < 1.38 or (
-        (odd.market_key == "AU_35" and odd.selection_key == "ALT")
-        or (odd.market_key == "AU_15" and odd.selection_key == "UST")
-    ) and odd.iddaa_odd < 1.42
+        ((odd.market_key == "AU_35" and odd.selection_key == "ALT")
+        or (odd.market_key == "AU_15" and odd.selection_key == "UST"))
+        and odd.iddaa_odd < 1.42
+    )
     if is_low_odd_trap_market:
         has_strong_edge = (model_market_edge >= 0.04) or (value_edge_pct is not None and value_edge_pct >= 3.0)
         if not has_strong_edge:
             low_odd_penalty = 5.5 if model_market_edge < 0.02 else 3.0
+
+    # Extra brake for anti-market AU_35:ALT / AU_25:ALT picks when global odds say iddaa is below market
+    if (
+        odd.market_key in ("AU_35", "AU_25")
+        and odd.selection_key == "ALT"
+        and value_edge_pct is not None
+        and value_edge_pct < -4.0
+    ):
+        low_odd_penalty += 3.5
 
     # Value weight boost for balanced core markets (MS, KG, AU_25, CS) with genuine positive edge
     if (
         not conflict_flag
         and odd.market_key in ("MS", "KG", "AU_25", "CS")
         and odd.iddaa_odd >= 1.40
-        and (model_market_edge >= 0.025 or (value_edge_pct is not None and value_edge_pct >= 0.5))
+        and (model_market_edge >= 0.02 or (value_edge_pct is not None and value_edge_pct >= 0.5))
     ):
         edge_pts = min(16.5, edge_pts + 2.0)
 
@@ -584,17 +642,24 @@ def analyze_upcoming_matches(db: Session) -> int:
                 continue
 
             p_prob = poisson_map.get((odd.market_key, odd.selection_key)) if poisson_map else None
-            val_s, true_prob, edge_pct, p_edge, conflict_flag = _compute_value_component(
-                odd, by_market[odd.market_key], p_prob
-            )
-
-            if p_prob is not None:
-                if odd.global_avg_odd and odd.global_avg_odd > 1.0:
-                    blended_prob = 0.60 * true_prob + 0.40 * p_prob
-                else:
-                    blended_prob = 0.55 * true_prob + 0.45 * p_prob
+            # Compute de-vigged market probability first for Bayesian calibration
+            mkt_odds = by_market[odd.market_key]
+            g_grp = [o.global_avg_odd for o in mkt_odds if o.global_avg_odd and o.global_avg_odd > 1.0]
+            if odd.global_avg_odd and len(g_grp) >= 2:
+                ovr = sum(1.0 / g for g in g_grp)
+                mkt_true_prob = (1.0 / odd.global_avg_odd) / ovr if ovr > 0 else (1.0 / odd.global_avg_odd)
             else:
-                blended_prob = true_prob
+                i_grp = [o.iddaa_odd for o in mkt_odds if o.iddaa_odd > 1.0]
+                ovr = sum(1.0 / i for i in i_grp) if len(i_grp) >= 2 else 1.10
+                mkt_true_prob = (1.0 / odd.iddaa_odd) / ovr if ovr > 0 else (1.0 / odd.iddaa_odd)
+
+            sparse = _is_sparse_data(ctx, odd)
+            calibrated_prob = _calibrate_market_prob(odd.market_key, mkt_true_prob, p_prob, sparse)
+
+            val_s, true_prob, edge_pct, p_edge, conflict_flag = _compute_value_component(
+                odd, mkt_odds, calibrated_prob if p_prob is not None else None
+            )
+            blended_prob = calibrated_prob
 
             sm = _compute_smart_money_and_trap(odd, all_odds_map, hist_by_key, now)
             form_s = _compute_form_goals_component(
@@ -607,6 +672,16 @@ def analyze_upcoming_matches(db: Session) -> int:
             total_score = val_s + sm["score"] + form_s + inj_s
             if sm["trap_warning"]:
                 total_score -= 10.0
+
+            # #1 Pick Realism Rule: high-risk picks (MS X, 1.5 Alt, prob < 42% / odd > 2.35)
+            # without multi-signal confirmation (strong global edge >= 3% + odds drop >= 3%)
+            high_risk = _is_high_risk_pick(odd.market_key, odd.selection_key, true_prob, odd.iddaa_odd)
+            multi_signal = (
+                edge_pct is not None and edge_pct >= 3.0
+            ) and (sm["drop_pct"] >= 3.0 or sm["vel_3h_pct"] >= 3.0)
+            unconfirmed_high_risk = high_risk and not multi_signal
+            if unconfirmed_high_risk:
+                total_score -= 8.0
 
             # Controlled ClubElo confidence nudge (max +/- 3.5 pts)
             elo_diff = None
@@ -637,6 +712,8 @@ def analyze_upcoming_matches(db: Session) -> int:
 
             if true_prob < 0.35:
                 total_score = min(total_score, 54.5)
+            if unconfirmed_high_risk:
+                total_score = min(total_score, 57.5)
             if odd.iddaa_odd >= MAX_HIGHLIGHT_ODD:
                 total_score = min(total_score, 48.0)
             if not has_form and odd.global_avg_odd is None:
@@ -731,8 +808,20 @@ def analyze_upcoming_matches(db: Session) -> int:
         )
         if pending_for_match:
             eligible_top = [p for p in pending_for_match if p.iddaa_odd < MAX_HIGHLIGHT_ODD] or pending_for_match
+            realistic_top = []
+            for p in eligible_top:
+                bd = json.loads(p.score_breakdown_json) if p.score_breakdown_json else {}
+                t_prob = float(bd.get("true_prob_pct", 50.0)) / 100.0
+                hr = _is_high_risk_pick(p.market_key, p.selection_key, t_prob, p.iddaa_odd)
+                msig = (p.value_edge_pct is not None and p.value_edge_pct >= 3.0) and (
+                    (p.odds_drop_pct is not None and p.odds_drop_pct >= 3.0)
+                    or float(bd.get("vel_3h_pct") or 0.0) >= 3.0
+                )
+                if not (hr and not msig):
+                    realistic_top.append(p)
+            candidate_pool = realistic_top or eligible_top
             best_pred = max(
-                eligible_top,
+                candidate_pool,
                 key=lambda p: (
                     p.confidence_score,
                     p.value_edge_pct if p.value_edge_pct is not None else -99.0,

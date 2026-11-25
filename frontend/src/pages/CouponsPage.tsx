@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Layers, Share2, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
+import { Layers, Lock, Share2, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import { api } from "../api/client";
 import { CouponShareModal } from "../components/CouponShareModal";
 import { TeamBadge } from "../components/TeamBadge";
@@ -203,12 +203,20 @@ export function CouponsPage({
                 <div>
                   <div className="flex items-start justify-between gap-2 mb-3">
                     <div>
-                      <span
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-bold ${meta.badge}`}
-                      >
-                        <Icon className="w-3.5 h-3.5" />
-                        {meta.title}
-                      </span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-bold ${meta.badge}`}
+                        >
+                          <Icon className="w-3.5 h-3.5" />
+                          {meta.title}
+                        </span>
+                        {c.is_locked && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800/90 border border-white/10 text-[10px] font-semibold text-slate-300">
+                            <Lock className="w-2.5 h-2.5 text-amber-400" />
+                            Kilitli
+                          </span>
+                        )}
+                      </div>
                       <p className="text-[11px] text-slate-400 mt-1.5">{meta.subtitle}</p>
                     </div>
                     <div className="text-right">
@@ -243,11 +251,38 @@ export function CouponsPage({
                           </p>
                           <TeamBadge name={it.away_team} logoUrl={it.away_logo_url} size="sm" />
                         </div>
-                        <div className="flex items-center justify-between mt-1.5 text-xs">
-                          <span className="text-emerald-400 font-bold">
-                            {formatMarketLabel(it.market_key, it.selection_key)}
-                          </span>
-                          <div className="flex items-center gap-2 mono-nums">
+                        <div className="flex items-center justify-between mt-1.5 text-xs gap-2">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="text-emerald-400 font-bold truncate">
+                              {formatMarketLabel(it.market_key, it.selection_key)}
+                            </span>
+                            {it.leg_result === "LIVE" && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-bold shrink-0">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                                Canlı
+                                {it.home_score != null && it.away_score != null
+                                  ? ` ${it.home_score}-${it.away_score}`
+                                  : ""}
+                              </span>
+                            )}
+                            {it.leg_result === "WON" && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold shrink-0 mono-nums">
+                                {it.home_score != null && it.away_score != null
+                                  ? `${it.home_score}-${it.away_score} • `
+                                  : ""}
+                                Kazandı
+                              </span>
+                            )}
+                            {it.leg_result === "LOST" && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-500/20 border border-rose-500/40 text-rose-300 text-[10px] font-bold shrink-0 mono-nums">
+                                {it.home_score != null && it.away_score != null
+                                  ? `${it.home_score}-${it.away_score} • `
+                                  : ""}
+                                Kaybetti
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 mono-nums shrink-0">
                             <span className="text-slate-400 text-[11px]">
                               Güven {Math.round(it.confidence_score)}
                             </span>
