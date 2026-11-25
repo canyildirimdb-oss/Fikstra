@@ -20,6 +20,7 @@ from app.config import settings
 from app.database import ensure_schema, get_db
 from app.models import Coupon, CouponItem, Match, Prediction, PushSubscription, ScraperCache, SyncLog
 from app.routers.api import clear_api_cache, router as api_router
+from app.telegram_bot import discover_telegram_topics, dispatch_telegram_settlements, send_telegram_test_messages
 from services.settlement import settle_coupons, settle_finished_matches
 from services.sync import is_sync_running, run_sync_pipeline
 
@@ -189,6 +190,11 @@ def trigger_cron_settle(
             db.add(ScraperCache(cache_key=LAST_SETTLE_KEY, payload_json=payload, updated_at=now))
         db.commit()
 
+        try:
+            dispatch_telegram_settlements(db)
+        except Exception:
+            pass
+
         return {
             "status": "ok",
             "skipped_external": not has_unsettled,
@@ -271,6 +277,18 @@ def subscribe_push(payload: PushSubscribeIn, db: Session = Depends(get_db)):
         )
     db.commit()
     return {"status": "subscribed"}
+
+
+@app.get("/api/admin/telegram/discover")
+def admin_telegram_discover(x_cron_secret: Optional[str] = Header(default=None)):
+    _verify_cron_secret(x_cron_secret)
+    return discover_telegram_topics()
+
+
+@app.post("/api/admin/telegram/test")
+def admin_telegram_test(x_cron_secret: Optional[str] = Header(default=None)):
+    _verify_cron_secret(x_cron_secret)
+    return send_telegram_test_messages()
 
 
 # Serve built frontend (single-service production mode) if dist/ exists

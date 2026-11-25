@@ -558,6 +558,13 @@ def run_sync_pipeline(
         db.commit()
 
         try:
+            from app.telegram_bot import dispatch_telegram_settlements, dispatch_telegram_updates
+            dispatch_telegram_updates(db)
+            dispatch_telegram_settlements(db)
+        except Exception:
+            pass
+
+        try:
             from app.routers.api import clear_api_cache
             clear_api_cache()
         except Exception:

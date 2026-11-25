@@ -9,6 +9,16 @@ class Settings(BaseSettings):
     vapid_private_key: str = ""
     vapid_subject: str = "mailto:admin@example.com"
     the_odds_api_key: str = ""
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    telegram_public_url: str = "https://fikstra.onrender.com"
+    telegram_topic_coupons: str = ""
+    telegram_topic_singles: str = ""
+    telegram_topic_value: str = ""
+    telegram_topic_results: str = ""
+    telegram_single_min_conf: float = 70.0
+    telegram_single_daily_cap: int = 6
+    telegram_value_daily_cap: int = 4
 
     model_config = SettingsConfigDict(
         env_file=".env",

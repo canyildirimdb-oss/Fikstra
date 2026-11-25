@@ -240,3 +240,18 @@ class NotificationLog(Base):
     body: Mapped[str] = mapped_column(Text)
     sent_count: Mapped[int] = mapped_column(Integer, default=0)
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class TelegramDispatch(Base):
+    __tablename__ = "telegram_dispatches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dispatch_key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    chat_id: Mapped[str] = mapped_column(String(64))
+    thread_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    message_id: Mapped[int] = mapped_column(Integer)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    settled_replied: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
