@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   BarChart3,
   Bell,
   BellRing,
+  ChevronRight,
   Flame,
   Layers,
   Share2,
   Ticket,
+  Trash2,
+  X,
 } from "lucide-react";
 import { api } from "./api/client";
 import { formatMarketLabel } from "./utils/format";
@@ -26,6 +30,14 @@ const TABS: { key: TabKey; label: string; icon: typeof Flame }[] = [
   { key: "performance", label: "Performans", icon: BarChart3 },
 ];
 
+function getTodayTrKey(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Istanbul" });
+}
+
+function getSlipStorageKey(): string {
+  return `fikstra_slip_${getTodayTrKey()}`;
+}
+
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -44,12 +56,65 @@ export function App() {
     matchId: number;
     couponPick?: { market_key: string; selection_key: string; iddaa_odd: number };
   } | null>(null);
-  const [slipItems, setSlipItems] = useState<CustomSlipItem[]>([]);
+
+  const [slipItems, setSlipItems] = useState<CustomSlipItem[]>(() => {
+    try {
+      const raw = localStorage.getItem(getSlipStorageKey());
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [slipSheetOpen, setSlipSheetOpen] = useState(false);
+  const [toast, setToast] = useState<{
+    message: string;
+    undoItems?: CustomSlipItem[];
+  } | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [pushStatus, setPushStatus] = useState<"idle" | "enabled" | "unsupported">("idle");
   const [pushMsg, setPushMsg] = useState<string | null>(null);
   const [slipSharePayload, setSlipSharePayload] = useState<ShareCouponPayload | null>(null);
   const lastAutoRefreshRef = useRef<number>(Date.now());
+
+  const showToast = useCallback((message: string, undoItems?: CustomSlipItem[]) => {
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    setToast({ message, undoItems });
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null);
+    }, 3600);
+  }, []);
+
+  // Clean started matches from persisted slip on startup
+  useEffect(() => {
+    const nowMs = Date.now();
+    setSlipItems((prev) => {
+      const valid = prev.filter((item) => {
+        if (!item.start_time_utc) return true;
+        const ms = Date.parse(item.start_time_utc);
+        return Number.isNaN(ms) || ms > nowMs;
+      });
+      if (valid.length < prev.length) {
+        showToast("Başlamış maçlar kuponumdan temizlendi");
+      }
+      return valid;
+    });
+  }, [showToast]);
+
+  // Persist slipItems per TR day
+  useEffect(() => {
+    try {
+      localStorage.setItem(getSlipStorageKey(), JSON.stringify(slipItems));
+    } catch {
+      // ignore storage quota errors
+    }
+  }, [slipItems]);
 
   // Redirect legacy /bulten or /bulletin route to home (Öne Çıkanlar)
   useEffect(() => {
@@ -102,13 +167,53 @@ export function App() {
     loadSummary();
   }, [loadSummary, refreshTrigger]);
 
-  const handleToggleSlip = (item: CustomSlipItem) => {
+  const handleToggleSlip = useCallback(
+    (item: CustomSlipItem) => {
+      setSlipItems((prev) => {
+        const exists = prev.some((x) => x.match_id === item.match_id);
+        if (exists) {
+          showToast(`${item.home_team} kupondan çıkarıldı`, prev);
+          return prev.filter((x) => x.match_id !== item.match_id);
+        }
+        showToast(`${item.home_team} kupona eklendi`, prev);
+        return [...prev, item];
+      });
+    },
+    [showToast]
+  );
+
+  const handleRemoveSlipItem = useCallback(
+    (matchId: number) => {
+      setSlipItems((prev) => {
+        const target = prev.find((x) => x.match_id === matchId);
+        if (target) {
+          showToast(`${target.home_team} kupondan çıkarıldı`, prev);
+        }
+        return prev.filter((x) => x.match_id !== matchId);
+      });
+    },
+    [showToast]
+  );
+
+  const handleClearSlip = useCallback(() => {
     setSlipItems((prev) => {
-      const exists = prev.some((x) => x.match_id === item.match_id);
-      if (exists) return prev.filter((x) => x.match_id !== item.match_id);
-      return [...prev, item];
+      if (prev.length > 0) {
+        showToast("Kuponum temizlendi", prev);
+      }
+      return [];
     });
-  };
+    setSlipSheetOpen(false);
+  }, [showToast]);
+
+  const handleImportSlip = useCallback(
+    (items: CustomSlipItem[]) => {
+      setSlipItems((prev) => {
+        showToast(`${items.length} maç kuponuma aktarıldı`, prev);
+        return items;
+      });
+    },
+    [showToast]
+  );
 
   const handleEnablePush = async () => {
     if (!("Notification" in window) || !("serviceWorker" in navigator)) {
@@ -152,8 +257,30 @@ export function App() {
 
   const customTotalOdd = slipItems.reduce((acc, x) => acc * x.iddaa_odd, 1);
 
+  const openSlipShare = () => {
+    const todayStr = getTodayTrKey();
+    const textPayload =
+      `Fikstra • Kendi Özel Kuponum (${todayStr})\n` +
+      slipItems
+        .map(
+          (s) =>
+            `• ${s.home_team} - ${s.away_team} | ${formatMarketLabel(s.market_key, s.selection_key)} @ ${s.iddaa_odd.toFixed(2)}`
+        )
+        .join("\n") +
+      `\nToplam Oran: ${customTotalOdd.toFixed(2)}`;
+    setSlipSharePayload({
+      tier: "CUSTOM",
+      title: "Kendi Özel Kuponum",
+      couponDate: todayStr,
+      totalOdd: customTotalOdd,
+      avgConfidence: null,
+      items: slipItems,
+      textPayload,
+    });
+  };
+
   return (
-    <div className="min-h-screen text-slate-100 pb-28 md:pb-14">
+    <div className="min-h-screen text-slate-100 pb-[calc(8.5rem+env(safe-area-inset-bottom))] md:pb-16">
       {/* Glassmorphic Neon Emerald Top Header */}
       <header className="sticky top-0 z-30 bg-[#05080D]/80 backdrop-blur-xl border-b border-emerald-500/15">
         <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between gap-3">
@@ -198,6 +325,11 @@ export function App() {
                 >
                   <Icon className="w-3.5 h-3.5" />
                   {t.label}
+                  {t.key === "coupons" && slipItems.length > 0 && (
+                    <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-[#00FF85] text-[#05080D] text-[10px] font-extrabold mono-nums leading-none">
+                      {slipItems.length}
+                    </span>
+                  )}
                   {active && (
                     <span className="absolute inset-x-3 -bottom-1 h-[2px] rounded-full bg-[#00FF85] shadow-[0_0_8px_#00FF85]" />
                   )}
@@ -244,6 +376,7 @@ export function App() {
           <HighlightsPage
             summary={summary}
             onSelectMatch={(id) => setSelectedMatch({ matchId: id })}
+            onGoPerformance={() => setTab("performance")}
             slipItems={slipItems}
             onToggleSlip={handleToggleSlip}
             refreshTrigger={refreshTrigger}
@@ -252,16 +385,43 @@ export function App() {
         {tab === "coupons" && (
           <CouponsPage
             slipItems={slipItems}
-            onRemoveSlipItem={(id) =>
-              setSlipItems((prev) => prev.filter((x) => x.match_id !== id))
-            }
-            onClearSlip={() => setSlipItems([])}
+            onRemoveSlipItem={handleRemoveSlipItem}
+            onClearSlip={handleClearSlip}
+            onImportSlip={handleImportSlip}
             onSelectMatch={(matchId, couponPick) => setSelectedMatch({ matchId, couponPick })}
             refreshTrigger={refreshTrigger}
           />
         )}
         {tab === "performance" && <PerformancePage refreshTrigger={refreshTrigger} />}
       </main>
+
+      {/* Undo Toast */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 16 }}
+            className="fixed left-4 right-4 md:left-auto md:right-6 bottom-[calc(8.2rem+env(safe-area-inset-bottom))] md:bottom-20 z-50 md:max-w-sm pointer-events-none"
+          >
+            <div className="pointer-events-auto px-4 py-2.5 rounded-xl bg-[#0B111C]/95 backdrop-blur-xl border border-emerald-500/35 shadow-2xl flex items-center justify-between gap-3 text-xs">
+              <span className="text-slate-100 font-medium truncate">{toast.message}</span>
+              {toast.undoItems && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSlipItems(toast.undoItems!);
+                    setToast(null);
+                  }}
+                  className="text-[#00FF85] font-extrabold shrink-0 hover:underline"
+                >
+                  Geri al
+                </button>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Desktop Floating Kuponum Fişi Bar (when not on Coupons tab) */}
       {slipItems.length > 0 && tab !== "coupons" && (
@@ -286,29 +446,7 @@ export function App() {
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
               <button
-                onClick={() => {
-                  const todayStr = new Date().toLocaleDateString("en-CA", {
-                    timeZone: "Europe/Istanbul",
-                  });
-                  const textPayload =
-                    `Fikstra • Kendi Özel Kuponum (${todayStr})\n` +
-                    slipItems
-                      .map(
-                        (s) =>
-                          `• ${s.home_team} - ${s.away_team} | ${formatMarketLabel(s.market_key, s.selection_key)} @ ${s.iddaa_odd.toFixed(2)}`
-                      )
-                      .join("\n") +
-                    `\nToplam Oran: ${customTotalOdd.toFixed(2)}`;
-                  setSlipSharePayload({
-                    tier: "CUSTOM",
-                    title: "Kendi Özel Kuponum",
-                    couponDate: todayStr,
-                    totalOdd: customTotalOdd,
-                    avgConfidence: null,
-                    items: slipItems,
-                    textPayload,
-                  });
-                }}
+                onClick={openSlipShare}
                 className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#00FF85] hover:bg-emerald-400 text-[#05080D] text-xs font-bold"
               >
                 <Share2 className="w-3.5 h-3.5" />
@@ -325,11 +463,122 @@ export function App() {
         </div>
       )}
 
-      {/* Mobile Floating Symmetric 4-Tab Bottom Navigation Dock */}
-      <nav className="md:hidden fixed bottom-3 inset-x-3 z-40">
-        <div className="relative rounded-2xl bg-[#080E18]/90 backdrop-blur-2xl border border-emerald-500/20 shadow-[0_12px_35px_-10px_rgba(0,0,0,0.85)] px-2 py-1.5 grid grid-cols-4 items-center">
-          {(["highlights", "coupons"] as TabKey[]).map((key) => {
-            const t = TABS.find((x) => x.key === key)!;
+      {/* Mobile Slim Floating Mini Kupon Bar (above bottom nav) */}
+      {slipItems.length > 0 && (
+        <div className="md:hidden fixed bottom-[calc(4.9rem+env(safe-area-inset-bottom))] inset-x-3 z-30 pointer-events-none">
+          <button
+            type="button"
+            onClick={() => setSlipSheetOpen(true)}
+            className="pointer-events-auto w-full px-4 py-2.5 rounded-xl bg-[#080E18]/95 backdrop-blur-xl border border-[#00FF85]/45 shadow-[0_8px_24px_-6px_rgba(0,255,133,0.3)] flex items-center justify-between gap-2 text-xs"
+          >
+            <div className="flex items-center gap-2 font-bold text-white mono-nums">
+              <Ticket className="w-4 h-4 text-[#00FF85]" />
+              <span>{slipItems.length} maç</span>
+              <span className="text-slate-500">·</span>
+              <span className="text-[#00FF85]">{customTotalOdd.toFixed(2)}</span>
+            </div>
+            <span className="inline-flex items-center gap-0.5 text-[#00FF85] font-bold">
+              Aç <ChevronRight className="w-3.5 h-3.5" />
+            </span>
+          </button>
+        </div>
+      )}
+
+      {/* Mobile Slip Bottom Sheet Drawer */}
+      <AnimatePresence>
+        {slipSheetOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setSlipSheetOpen(false)}
+            className="md:hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end"
+          >
+            <motion.div
+              initial={{ y: 64, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 64, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-h-[78vh] overflow-y-auto rounded-t-3xl bg-[#070B12]/98 border-t border-emerald-500/30 p-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))] space-y-4"
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-extrabold text-[#00FF85]">Kuponum Fişi</h3>
+                  <p className="text-[11px] text-slate-400 mono-nums">
+                    {slipItems.length} maç • Toplam Oran: {customTotalOdd.toFixed(2)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSlipSheetOpen(false)}
+                  className="p-2 rounded-xl bg-[#0B0F17] border border-[#1F2937] text-slate-400"
+                  aria-label="Kapat"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {slipItems.map((s) => (
+                  <div
+                    key={s.match_id}
+                    className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl bg-[#0B0F17] border border-[#1F2937] text-xs"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-100 truncate">
+                        {s.home_team} - {s.away_team}
+                      </p>
+                      <p className="text-[11px] text-emerald-400 font-bold">
+                        {formatMarketLabel(s.market_key, s.selection_key)}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2.5 shrink-0">
+                      <span className="mono-nums font-extrabold text-white">
+                        {s.iddaa_odd.toFixed(2)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveSlipItem(s.match_id)}
+                        className="w-8 h-8 rounded-lg bg-white/5 text-slate-400 hover:text-rose-400 flex items-center justify-center"
+                        aria-label="Çıkar"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSlipSheetOpen(false);
+                    openSlipShare();
+                  }}
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 py-3 rounded-xl bg-[#00FF85] text-[#05080D] text-xs font-extrabold"
+                >
+                  <Share2 className="w-4 h-4" />
+                  Kuponu Paylaş
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearSlip}
+                  className="px-4 py-3 rounded-xl bg-[#0B0F17] border border-white/10 text-slate-300 hover:text-rose-400 text-xs font-bold inline-flex items-center gap-1"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Temizle
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Mobile Floating Symmetric 3-Tab Bottom Navigation Dock */}
+      <nav className="md:hidden fixed bottom-[calc(0.75rem+env(safe-area-inset-bottom))] inset-x-3 z-40">
+        <div className="relative rounded-2xl bg-[#080E18]/92 backdrop-blur-2xl border border-emerald-500/20 shadow-[0_12px_35px_-10px_rgba(0,0,0,0.85)] px-2 py-1.5 grid grid-cols-3 items-center">
+          {TABS.map((t) => {
             const Icon = t.icon;
             const active = tab === t.key;
             return (
@@ -340,7 +589,14 @@ export function App() {
                   active ? "text-[#00FF85]" : "text-slate-400"
                 }`}
               >
-                <Icon className="w-4 h-4" />
+                <div className="relative">
+                  <Icon className="w-4 h-4" />
+                  {t.key === "coupons" && slipItems.length > 0 && (
+                    <span className="absolute -top-2 -right-3 min-w-[16px] h-[16px] px-1 rounded-full bg-[#00FF85] text-[#05080D] text-[9px] font-extrabold mono-nums flex items-center justify-center shadow">
+                      {slipItems.length}
+                    </span>
+                  )}
+                </div>
                 <span className="text-[10px] font-semibold mt-0.5 truncate">{t.label}</span>
                 {active && (
                   <span className="absolute bottom-0.5 w-6 h-[2.5px] rounded-full bg-[#00FF85] shadow-[0_0_8px_#00FF85]" />
@@ -348,45 +604,6 @@ export function App() {
               </button>
             );
           })}
-
-          {/* Neon Green Highlighted Kuponum Button with Badge */}
-          <button
-            onClick={() => {
-              setTab("coupons");
-              window.scrollTo({ top: 0, behavior: "smooth" });
-            }}
-            className="relative flex flex-col items-center justify-center py-1.5 rounded-xl bg-[#00FF85]/15 border border-[#00FF85]/45 text-[#00FF85] shadow-[0_0_16px_-4px_rgba(0,255,133,0.45)] active:scale-95 transition-transform mx-1"
-            title="Kuponum"
-          >
-            <Ticket className="w-4 h-4 stroke-[2.3]" />
-            <span className="text-[10px] font-bold mt-0.5 truncate">Kuponum</span>
-            {slipItems.length > 0 && (
-              <span className="absolute -top-1.5 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#00FF85] text-[#05080D] text-[10px] font-extrabold mono-nums flex items-center justify-center shadow">
-                {slipItems.length}
-              </span>
-            )}
-          </button>
-
-          {(() => {
-            const t = TABS.find((x) => x.key === "performance")!;
-            const Icon = t.icon;
-            const active = tab === t.key;
-            return (
-              <button
-                key={t.key}
-                onClick={() => setTab(t.key)}
-                className={`relative flex flex-col items-center justify-center py-1.5 rounded-xl transition-colors ${
-                  active ? "text-[#00FF85]" : "text-slate-400"
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                <span className="text-[10px] font-semibold mt-0.5 truncate">{t.label}</span>
-                {active && (
-                  <span className="absolute bottom-0.5 w-6 h-[2.5px] rounded-full bg-[#00FF85] shadow-[0_0_8px_#00FF85]" />
-                )}
-              </button>
-            );
-          })()}
         </div>
       </nav>
 
@@ -395,6 +612,8 @@ export function App() {
         matchId={selectedMatch?.matchId ?? null}
         couponPick={selectedMatch?.couponPick}
         onClose={() => setSelectedMatch(null)}
+        slipItems={slipItems}
+        onToggleSlip={handleToggleSlip}
       />
       <CouponShareModal payload={slipSharePayload} onClose={() => setSlipSharePayload(null)} />
     </div>

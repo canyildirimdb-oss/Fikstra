@@ -18,6 +18,35 @@ export function formatMarketLabel(marketKey: string, selectionKey: string): stri
   return `${m} ${s}`;
 }
 
+export function formatPickWithTeam(
+  marketKey: string,
+  selectionKey: string,
+  homeTeam?: string,
+  awayTeam?: string
+): string {
+  if (marketKey === "MS" && selectionKey === "1" && homeTeam) {
+    return `${homeTeam} · MS 1`;
+  }
+  if (marketKey === "MS" && selectionKey === "2" && awayTeam) {
+    return `${awayTeam} · MS 2`;
+  }
+  return formatMarketLabel(marketKey, selectionKey);
+}
+
+export function formatTurkishDate(isoDate: string): string {
+  if (!isoDate) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate.trim());
+  if (!m) return isoDate;
+  const dt = new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00+03:00`);
+  if (Number.isNaN(dt.getTime())) return isoDate;
+  return new Intl.DateTimeFormat("tr-TR", {
+    day: "numeric",
+    month: "long",
+    weekday: "long",
+    timeZone: "Europe/Istanbul",
+  }).format(dt);
+}
+
 export function getConfidenceTone(score: number) {
   if (score >= 85) {
     return {

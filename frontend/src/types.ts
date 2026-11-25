@@ -260,4 +260,5 @@ export interface CustomSlipItem {
   market_key: string;
   selection_key: string;
   iddaa_odd: number;
+  start_time_utc?: string;
 }

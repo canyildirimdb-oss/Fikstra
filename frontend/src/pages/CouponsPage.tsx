@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Layers, Lock, Share2, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
+import { ArrowDownToLine, Layers, Lock, Share2, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import { api } from "../api/client";
 import { CouponShareModal } from "../components/CouponShareModal";
 import { TeamBadge } from "../components/TeamBadge";
@@ -11,6 +11,7 @@ interface Props {
   slipItems: CustomSlipItem[];
   onRemoveSlipItem: (matchId: number) => void;
   onClearSlip: () => void;
+  onImportSlip: (items: CustomSlipItem[]) => void;
   onSelectMatch: (
     matchId: number,
     couponPick?: { market_key: string; selection_key: string; iddaa_odd: number }
@@ -46,10 +47,13 @@ export function CouponsPage({
   slipItems,
   onRemoveSlipItem,
   onClearSlip,
+  onImportSlip,
   onSelectMatch,
   refreshTrigger,
 }: Props) {
   const [subTab, setSubTab] = useState<"active" | "history">("active");
+  const [mobileTier, setMobileTier] = useState<"BANKO" | "DENGELI" | "SURPRIZ">("BANKO");
+  const [lockInfoId, setLockInfoId] = useState<number | null>(null);
   const [coupons, setCoupons] = useState<CouponData[]>([]);
   const [historyCoupons, setHistoryCoupons] = useState<CouponData[]>([]);
   const [loading, setLoading] = useState(true);
@@ -206,17 +210,52 @@ export function CouponsPage({
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="space-y-3">
+          {/* Mobile Tier Segment Selector */}
+          <div className="md:hidden grid grid-cols-3 gap-1.5 p-1 rounded-xl glass-card">
+            {(
+              [
+                { key: "BANKO", label: "Banko" },
+                { key: "DENGELI", label: "Dengeli" },
+                { key: "SURPRIZ", label: "Sürpriz" },
+              ] as const
+            ).map((t) => {
+              const found = coupons.find((x) => x.tier === t.key);
+              const active = mobileTier === t.key;
+              return (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => setMobileTier(t.key)}
+                  className={`py-2 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 mono-nums ${
+                    active
+                      ? "bg-[#00FF85] text-[#05080D] shadow-[0_0_12px_-3px_rgba(0,255,133,0.6)]"
+                      : "text-slate-300"
+                  }`}
+                >
+                  <span>{t.label}</span>
+                  {found && (
+                    <span className={active ? "text-[#05080D]/80" : "text-emerald-400"}>
+                      {found.total_odd.toFixed(2)}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {(["BANKO", "DENGELI", "SURPRIZ"] as const).map((tierKey) => {
             const c = coupons.find((x) => x.tier === tierKey);
             const meta = TIER_META[tierKey] || TIER_META.BANKO;
             const Icon = meta.icon;
+            const mobileVis = mobileTier === tierKey ? "flex" : "hidden md:flex";
 
             if (!c) {
               return (
                 <div
                   key={tierKey}
-                  className="flex flex-col justify-between p-4 rounded-2xl glass-card opacity-85"
+                  className={`${mobileVis} flex-col justify-between p-4 rounded-2xl glass-card opacity-85`}
                 >
                   <div>
                     <span
@@ -252,7 +291,7 @@ export function CouponsPage({
             return (
               <div
                 key={c.id}
-                className="flex flex-col justify-between p-4 rounded-2xl glass-card neon-bottom-glow"
+                className={`${mobileVis} flex-col justify-between p-4 rounded-2xl glass-card neon-bottom-glow`}
               >
                 <div>
                   <div className="flex items-start justify-between gap-2 mb-3">
@@ -264,13 +303,39 @@ export function CouponsPage({
                           <Icon className="w-3.5 h-3.5" />
                           {meta.title}
                         </span>
+                        {/* Leg progress dots */}
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-white/[0.04]" title="Ayak durumu">
+                          {c.items.map((it) => (
+                            <span
+                              key={it.prediction_id}
+                              className={`w-2 h-2 rounded-full ${
+                                it.leg_result === "WON"
+                                  ? "bg-[#00FF85]"
+                                  : it.leg_result === "LOST"
+                                  ? "bg-rose-500"
+                                  : it.leg_result === "LIVE"
+                                  ? "bg-amber-400 animate-pulse"
+                                  : "bg-slate-600"
+                              }`}
+                            />
+                          ))}
+                        </span>
                         {c.is_locked && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800/90 border border-white/10 text-[10px] font-semibold text-slate-300">
+                          <button
+                            type="button"
+                            onClick={() => setLockInfoId((cur) => (cur === c.id ? null : c.id))}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800/90 border border-white/10 text-[10px] font-semibold text-slate-300 hover:border-amber-400/50"
+                          >
                             <Lock className="w-2.5 h-2.5 text-amber-400" />
                             Kilitli
-                          </span>
+                          </button>
                         )}
                       </div>
+                      {c.is_locked && lockInfoId === c.id && (
+                        <p className="text-[10px] text-amber-300/90 bg-amber-500/10 border border-amber-500/25 rounded-lg px-2 py-1 mt-1.5">
+                          İlk maç başlamasına ≤15 dk kaldığı için kupon kilitlendi; tüm ayaklar bitene kadar korunur.
+                        </p>
+                      )}
                       <p className="text-[11px] text-slate-400 mt-1.5">{meta.subtitle}</p>
                     </div>
                     <div className="text-right">
@@ -339,10 +404,12 @@ export function CouponsPage({
                             )}
                           </div>
                           <div className="flex items-center gap-2 mono-nums shrink-0">
-                            <span className="text-slate-400 text-[11px]">
-                              Güven {Math.round(it.confidence_score)}
+                            <span className="text-slate-400 text-[10px]">
+                              G:{Math.round(it.confidence_score)}
                             </span>
-                            <span className="font-bold text-white">{it.iddaa_odd.toFixed(2)}</span>
+                            <span className="px-2 py-0.5 rounded-md bg-white/[0.08] font-extrabold text-white">
+                              {it.iddaa_odd.toFixed(2)}
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -350,31 +417,53 @@ export function CouponsPage({
                   </div>
                 </div>
 
-                <div className="pt-3 border-t border-[#1F2937] flex items-center justify-between">
-                  <span className="text-[11px] text-slate-400 mono-nums">
-                    Ort. Güven: {c.avg_confidence.toFixed(1)} / 100
-                  </span>
-                  <button
-                    onClick={() =>
-                      setSharePayload({
-                        tier: (c.tier as "BANKO" | "DENGELI" | "SURPRIZ") || "BANKO",
-                        title: meta.title,
-                        couponDate: c.coupon_date,
-                        totalOdd: c.total_odd,
-                        avgConfidence: c.avg_confidence,
-                        couponStatus: c.status,
-                        items: c.items,
-                        textPayload,
-                      })
-                    }
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/35 hover:bg-emerald-500/25 text-xs font-bold text-emerald-300"
-                  >
-                    <Share2 className="w-3.5 h-3.5" /> Kuponu Paylaş
-                  </button>
+                <div className="pt-3 border-t border-[#1F2937] space-y-2">
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 mono-nums">
+                    <span>Ort. Güven: {c.avg_confidence.toFixed(1)} / 100</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onImportSlip(
+                          c.items.map((it) => ({
+                            match_id: it.match_id,
+                            home_team: it.home_team,
+                            away_team: it.away_team,
+                            market_key: it.market_key,
+                            selection_key: it.selection_key,
+                            iddaa_odd: it.iddaa_odd,
+                          }))
+                        )
+                      }
+                      className="flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-xl glass-card hover:border-[#00FF85]/45 text-xs font-bold text-slate-200"
+                    >
+                      <ArrowDownToLine className="w-3.5 h-3.5 text-[#00FF85]" />
+                      Kuponuma Aktar
+                    </button>
+                    <button
+                      onClick={() =>
+                        setSharePayload({
+                          tier: (c.tier as "BANKO" | "DENGELI" | "SURPRIZ") || "BANKO",
+                          title: meta.title,
+                          couponDate: c.coupon_date,
+                          totalOdd: c.total_odd,
+                          avgConfidence: c.avg_confidence,
+                          couponStatus: c.status,
+                          items: c.items,
+                          textPayload,
+                        })
+                      }
+                      className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/35 hover:bg-emerald-500/25 text-xs font-bold text-emerald-300"
+                    >
+                      <Share2 className="w-3.5 h-3.5" /> Paylaş
+                    </button>
+                  </div>
                 </div>
               </div>
             );
           })}
+          </div>
         </div>
       ))}
 

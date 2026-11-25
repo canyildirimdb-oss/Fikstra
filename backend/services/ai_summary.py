@@ -34,6 +34,19 @@ MARKET_LABELS = {
 }
 
 
+def _finalize_ai_summary(text: str) -> str:
+    """Ensure Gemini summary never ends mid-sentence if output was truncated."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return cleaned
+    if cleaned[-1] in ".!?…\"”":
+        return cleaned
+    last_end = max(cleaned.rfind("."), cleaned.rfind("!"), cleaned.rfind("?"))
+    if last_end >= max(30, int(len(cleaned) * 0.4)):
+        return cleaned[: last_end + 1].strip()
+    return f"{cleaned}."
+
+
 def _build_rule_based_summary(
     match: Match,
     top_pred: Optional[Prediction],
@@ -166,19 +179,20 @@ def generate_match_summary(
                         headers={"x-goog-api-key": api_key},
                         json={
                             "contents": [{"parts": [{"text": prompt}]}],
-                            "generationConfig": {"temperature": 0.4, "maxOutputTokens": 450},
+                            "generationConfig": {"temperature": 0.4, "maxOutputTokens": 650},
                         },
                         timeout=11.0,
                     )
                     if resp.status_code == 200:
                         data = resp.json()
-                        text = (
+                        raw_text = (
                             data.get("candidates", [{}])[0]
                             .get("content", {})
                             .get("parts", [{}])[0]
                             .get("text", "")
                             .strip()
                         )
+                        text = _finalize_ai_summary(raw_text)
                         if text:
                             ctx.ai_summary = text
                             ctx.ai_summary_pick = current_pick

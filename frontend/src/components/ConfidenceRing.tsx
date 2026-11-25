@@ -10,9 +10,15 @@ export function ConfidenceRing({ score, size = 54 }: Props) {
   const clamped = Math.max(0, Math.min(100, score));
   const offset = circ - (clamped / 100) * circ;
 
-  const isHigh = clamped >= 70;
-  const stroke = isHigh ? "#00FF85" : clamped >= 60 ? "#10B981" : "#34D399";
-  const textCls = isHigh ? "text-[#00FF85]" : "text-emerald-400";
+  const isHigh = clamped >= 80;
+  const isMid = clamped >= 70 && clamped < 80;
+  const stroke = isHigh ? "#00FF85" : isMid ? "#10B981" : "#34D399";
+  const strokeOpacity = isHigh || isMid ? 1 : 0.6;
+  const textCls = isHigh
+    ? "text-[#00FF85]"
+    : isMid
+    ? "text-emerald-400"
+    : "text-emerald-300/75";
 
   return (
     <div
@@ -20,7 +26,7 @@ export function ConfidenceRing({ score, size = 54 }: Props) {
       style={{
         width: size,
         height: size,
-        filter: isHigh ? "drop-shadow(0 0 8px rgba(0, 255, 133, 0.35))" : undefined,
+        filter: isHigh ? "drop-shadow(0 0 8px rgba(0, 255, 133, 0.4))" : undefined,
       }}
     >
       <svg width={size} height={size} className="-rotate-90">
@@ -38,6 +44,7 @@ export function ConfidenceRing({ score, size = 54 }: Props) {
           r={r}
           fill="none"
           stroke={stroke}
+          strokeOpacity={strokeOpacity}
           strokeWidth={strokeWidth}
           strokeLinecap="round"
           strokeDasharray={circ}

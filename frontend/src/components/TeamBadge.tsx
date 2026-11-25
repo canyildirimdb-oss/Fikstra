@@ -64,9 +64,33 @@ export function LeagueBadge({
   );
 }
 
-export function FormStrip({ form }: { form: string[] }) {
+export function FormStrip({
+  form,
+  variant = "dots",
+}: {
+  form: string[];
+  variant?: "dots" | "boxes";
+}) {
   if (!form || form.length === 0) {
     return <span className="text-[10px] text-slate-500">—</span>;
+  }
+  if (variant === "dots") {
+    const dotMap: Record<string, string> = {
+      W: "bg-[#00FF85]",
+      D: "bg-amber-400",
+      L: "bg-rose-500",
+    };
+    return (
+      <div className="inline-flex items-center gap-1 shrink-0" aria-label="Son 5 maç formu">
+        {form.slice(0, 5).map((item, idx) => (
+          <span
+            key={idx}
+            className={`w-[7px] h-[7px] rounded-full ${dotMap[item] || "bg-slate-600"}`}
+            title={item === "W" ? "Galibiyet" : item === "D" ? "Beraberlik" : "Mağlubiyet"}
+          />
+        ))}
+      </div>
+    );
   }
   const map: Record<string, { label: string; cls: string }> = {
     W: { label: "G", cls: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" },

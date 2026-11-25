@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Award, Clock, Info } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Award, ChevronDown, ChevronUp, Clock, Info } from "lucide-react";
 import {
   Area,
   AreaChart,
@@ -37,9 +37,18 @@ function MetricInfo({ text }: { text: string }) {
   );
 }
 
+function parseDayMonthScore(dateStr: string): number {
+  const parts = (dateStr || "").split(".");
+  if (parts.length !== 2) return 0;
+  const d = Number(parts[0]) || 0;
+  const m = Number(parts[1]) || 0;
+  return m * 100 + d;
+}
+
 export function PerformancePage({ refreshTrigger }: Props) {
   const [data, setData] = useState<PerformanceData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [glossaryOpen, setGlossaryOpen] = useState(false);
 
   useEffect(() => {
     if (data === null) setLoading(true);
@@ -49,24 +58,67 @@ export function PerformancePage({ refreshTrigger }: Props) {
       .finally(() => setLoading(false));
   }, [refreshTrigger]);
 
+  const sortedTrend = useMemo(() => {
+    if (!data?.trend?.length) return [];
+    return [...data.trend]
+      .sort((a, b) => parseDayMonthScore(a.date) - parseDayMonthScore(b.date))
+      .map((t) => ({
+        ...t,
+        won: Math.round((t.win_rate / 100) * t.total),
+      }));
+  }, [data?.trend]);
+
   if (loading || !data) {
     return <div className="h-48 rounded-2xl bg-[#131926] border border-[#1F2937] animate-pulse" />;
   }
 
   return (
     <div className="space-y-4">
-      {/* Top Metrics */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div className="p-4 rounded-2xl glass-card neon-bottom-glow">
-          <p className="text-[11px] text-slate-400">Başarı Oranımız</p>
-          <p className="text-2xl font-extrabold mono-nums text-[#00FF85] mt-1">
-            {data.overall_win_rate !== null ? `%${data.overall_win_rate}` : "—"}
+      {/* Human-Language Trust Hero */}
+      <div className="p-4 sm:p-5 rounded-2xl glass-card neon-bottom-glow flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <p className="text-[11px] uppercase tracking-wider font-semibold text-emerald-300/80">
+            Resmi 60+ Güven Performansı
           </p>
-          <p className="text-[10px] text-slate-500 mt-0.5">
-            60+ Puan Resmi Tahminler • {data.won_count}K / {data.lost_count}M
+          <h2 className="text-lg sm:text-xl font-extrabold text-white mt-0.5">
+            {data.total_settled > 0
+              ? `Son ${data.total_settled} tahminin ${data.won_count}'i tuttu`
+              : "İlk sonuçlar bekleniyor"}
+          </h2>
+          <p className="text-xs text-slate-400 mt-1">
+            {data.total_settled > 0
+              ? `${data.won_count} Kazandı • ${data.lost_count} Kaybetti`
+              : "Maçlar tamamlandığında resmi 90 dk skorlarıyla otomatik işlenir."}
           </p>
         </div>
 
+        <div className="flex items-center gap-3">
+          {data.archive.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap max-w-[200px]" aria-label="Son sonuçlar">
+              {data.archive.slice(0, 16).map((row) => (
+                <span
+                  key={row.prediction_id}
+                  title={`${row.home_team} - ${row.away_team}: ${row.status === "WON" ? "Kazandı" : "Kaybetti"}`}
+                  className={`w-2.5 h-2.5 rounded-full ${
+                    row.status === "WON"
+                      ? "bg-[#00FF85] shadow-[0_0_6px_rgba(0,255,133,0.5)]"
+                      : "bg-rose-500/80"
+                  }`}
+                />
+              ))}
+            </div>
+          )}
+          <div className="px-3.5 py-2 rounded-xl bg-[#05080D]/80 border border-emerald-500/25 text-right shrink-0">
+            <span className="text-[10px] text-slate-400 block">Başarı Oranı</span>
+            <span className="text-xl font-extrabold mono-nums text-[#00FF85]">
+              {data.overall_win_rate !== null ? `%${data.overall_win_rate}` : "—"}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Top Metrics */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <div className="p-4 rounded-2xl glass-card">
           <p className="text-[11px] text-slate-400 flex items-center">
             Ortalama CLV %
@@ -95,46 +147,30 @@ export function PerformancePage({ refreshTrigger }: Props) {
 
         {(["BANKO", "DENGELI", "SURPRIZ"] as const).map((tier) => {
           const st = data.coupon_tiers[tier] || { total: 0, won: 0, win_rate: null };
+          const lowSample = st.total < 10;
           return (
             <div key={tier} className="p-4 rounded-2xl bg-[#131926] border border-[#1F2937]">
-              <p className="text-[11px] text-slate-400">{tier} Kupon</p>
+              <div className="flex items-center justify-between gap-1">
+                <p className="text-[11px] text-slate-400">{tier} Kupon</p>
+                {lowSample && (
+                  <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[9px] font-semibold">
+                    Az veri
+                  </span>
+                )}
+              </div>
               <p className="text-2xl font-extrabold mono-nums text-cyan-400 mt-1">
-                {st.win_rate !== null ? `%${st.win_rate}` : "—"}
+                {lowSample
+                  ? `${st.won}/${st.total}`
+                  : st.win_rate !== null
+                  ? `%${st.win_rate}`
+                  : "—"}
               </p>
               <p className="text-[10px] text-slate-500 mt-0.5">
-                {st.won}/{st.total} tuttu
+                {lowSample ? "Örneklem < 10 kupon" : `${st.won}/${st.total} tuttu`}
               </p>
             </div>
           );
         })}
-      </div>
-
-      {/* Quant Glossary Strip (Kelly Birimi & ClubElo) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div className="p-3.5 rounded-2xl bg-[#131926] border border-[#1F2937] flex items-center justify-between gap-2">
-          <div>
-            <p className="text-xs font-bold text-slate-200 flex items-center">
-              Kelly Birimi (1–5)
-              <MetricInfo text="Oran avantajı ve güven skoruna göre tek maça ayrılması önerilen kasa ağırlığını (1 en düşük, 5 en yüksek) gösterir." />
-            </p>
-            <p className="text-[11px] text-slate-400 mt-0.5">Kasa yönetimi birim ölçeği</p>
-          </div>
-          <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-xs font-bold mono-nums">
-            1.0–5.0
-          </span>
-        </div>
-        <div className="p-3.5 rounded-2xl bg-[#131926] border border-[#1F2937] flex items-center justify-between gap-2">
-          <div>
-            <p className="text-xs font-bold text-slate-200 flex items-center">
-              ClubElo Güç Puanı
-              <MetricInfo text="Avrupa kulüplerinin lig zorluğu ve uzun vadeli maç sonuçlarına göre hesaplanan uluslararası güç reytingidir." />
-            </p>
-            <p className="text-[11px] text-slate-400 mt-0.5">Lig kalitesi ve takım gücü</p>
-          </div>
-          <span className="px-2.5 py-1 rounded-lg bg-cyan-500/15 text-cyan-400 text-xs font-bold mono-nums">
-            Elo
-          </span>
-        </div>
       </div>
 
       {/* Confidence Band Calibration Mini Table */}
@@ -143,20 +179,27 @@ export function PerformancePage({ refreshTrigger }: Props) {
           Güven Bandı Kalibrasyonu
         </h4>
         <div className="grid grid-cols-3 gap-2">
-          {(data.calibration_bands || []).map((b) => (
-            <div
-              key={b.band}
-              className="p-3 rounded-xl bg-[#0B0F17] border border-[#1F2937] text-center"
-            >
-              <span className="text-[11px] text-slate-400 block">{b.band} Puan</span>
-              <span className="text-base font-bold mono-nums text-slate-100 mt-0.5 block">
-                {b.win_rate !== null ? `%${b.win_rate}` : "Bekleniyor"}
-              </span>
-              <span className="text-[10px] text-slate-500 mono-nums">
-                {b.won}/{b.total}
-              </span>
-            </div>
-          ))}
+          {(data.calibration_bands || []).map((b) => {
+            const lowSample = b.total < 10;
+            return (
+              <div
+                key={b.band}
+                className="p-3 rounded-xl bg-[#0B0F17] border border-[#1F2937] text-center"
+              >
+                <span className="text-[11px] text-slate-400 block">{b.band} Puan</span>
+                <span className="text-base font-bold mono-nums text-slate-100 mt-0.5 block">
+                  {lowSample
+                    ? `${b.won}/${b.total}`
+                    : b.win_rate !== null
+                    ? `%${b.win_rate}`
+                    : "Bekleniyor"}
+                </span>
+                <span className="text-[10px] text-slate-500 mono-nums block mt-0.5">
+                  {lowSample ? "Az veri" : `${b.won}/${b.total}`}
+                </span>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -174,36 +217,59 @@ export function PerformancePage({ refreshTrigger }: Props) {
         </div>
       ) : (
         <>
-          {data.trend.length > 0 && (
+          {sortedTrend.length > 0 && (
             <div className="p-4 rounded-2xl bg-[#131926] border border-[#1F2937]">
               <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3 flex items-center gap-1.5">
                 <Award className="w-4 h-4 text-emerald-400" />
-                Günlük Tutturma Trendi (%)
+                Günlük Tutturma Trendi
               </h4>
-              <div className="h-48 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={data.trend}>
-                    <XAxis dataKey="date" stroke="#64748B" fontSize={10} />
-                    <YAxis stroke="#64748B" fontSize={10} domain={[0, 100]} width={30} />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "#0B0F17",
-                        borderColor: "#1F2937",
-                        borderRadius: "10px",
-                        fontSize: "12px",
-                      }}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="win_rate"
-                      stroke="#10B981"
-                      fill="#10B981"
-                      fillOpacity={0.18}
-                      strokeWidth={2}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
+              {sortedTrend.length < 3 ? (
+                <div className="flex flex-wrap gap-2">
+                  {sortedTrend.map((t) => (
+                    <div
+                      key={t.date}
+                      className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#0B0F17] border border-emerald-500/25 text-xs mono-nums"
+                    >
+                      <span className="text-slate-300 font-semibold">{t.date}</span>
+                      <span className="text-slate-500">·</span>
+                      <span className="text-[#00FF85] font-extrabold">
+                        {t.won}/{t.total}
+                      </span>
+                      <span className="text-slate-400 text-[11px]">(%{t.win_rate})</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="h-48 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={sortedTrend}>
+                      <XAxis dataKey="date" stroke="#64748B" fontSize={10} />
+                      <YAxis stroke="#64748B" fontSize={10} domain={[0, 100]} width={30} />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: "#0B0F17",
+                          borderColor: "#1F2937",
+                          borderRadius: "10px",
+                          fontSize: "12px",
+                        }}
+                        formatter={(value: unknown, _name: unknown, props: { payload?: { won?: number; total?: number } }) => {
+                          const won = props?.payload?.won ?? 0;
+                          const total = props?.payload?.total ?? 0;
+                          return [`%${value} (${won}/${total})`, "Başarı"];
+                        }}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="win_rate"
+                        stroke="#10B981"
+                        fill="#10B981"
+                        fillOpacity={0.18}
+                        strokeWidth={2}
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </div>
           )}
 
@@ -212,37 +278,88 @@ export function PerformancePage({ refreshTrigger }: Props) {
               Sonuçlanan Tahmin Arşivi
             </div>
             <div className="divide-y divide-[#1F2937]">
-              {data.archive.map((row) => (
-                <div
-                  key={row.prediction_id}
-                  className="px-4 py-3 flex items-center justify-between gap-3 text-xs"
-                >
-                  <div className="min-w-0">
-                    <p className="text-[10px] text-slate-400 truncate">{row.league}</p>
-                    <p className="font-semibold text-slate-100 truncate">
-                      {row.home_team} {row.home_score ?? "-"}-{row.away_score ?? "-"} {row.away_team}
-                    </p>
+              {data.archive.map((row) => {
+                const isWon = row.status === "WON";
+                return (
+                  <div
+                    key={row.prediction_id}
+                    className={`px-4 py-3 flex items-center justify-between gap-3 text-xs border-l-[3px] ${
+                      isWon ? "border-l-[#00FF85]" : "border-l-rose-500"
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[10px] text-slate-400 truncate">{row.league}</p>
+                      <p className="font-semibold text-slate-100 leading-snug break-words mt-0.5">
+                        {row.home_team}{" "}
+                        <span className="mono-nums text-white">
+                          {row.home_score ?? "-"}-{row.away_score ?? "-"}
+                        </span>{" "}
+                        {row.away_team}
+                      </p>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <span className="text-slate-300 text-[11px] mono-nums">
+                        {formatMarketLabel(row.market_key, row.selection_key)} · {row.iddaa_odd.toFixed(2)}
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                          isWon
+                            ? "bg-emerald-500/20 text-emerald-400"
+                            : "bg-rose-500/20 text-rose-400"
+                        }`}
+                      >
+                        {isWon ? "KAZANDI" : "KAYBETTİ"}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span className="text-slate-300">
-                      {formatMarketLabel(row.market_key, row.selection_key)} ({row.iddaa_odd.toFixed(2)})
-                    </span>
-                    <span
-                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
-                        row.status === "WON"
-                          ? "bg-emerald-500/20 text-emerald-400"
-                          : "bg-rose-500/20 text-rose-400"
-                      }`}
-                    >
-                      {row.status === "WON" ? "KAZANDI" : "KAYBETTİ"}
-                    </span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </>
       )}
+
+      {/* Collapsible Metric Glossary */}
+      <div className="rounded-2xl bg-[#131926] border border-[#1F2937] overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setGlossaryOpen((v) => !v)}
+          className="w-full px-4 py-3 flex items-center justify-between text-xs font-bold text-slate-200 hover:bg-white/[0.02]"
+        >
+          <span>Metrik Sözlüğü (Kelly Birimi, ClubElo, CLV & Brier)</span>
+          {glossaryOpen ? (
+            <ChevronUp className="w-4 h-4 text-slate-400" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-slate-400" />
+          )}
+        </button>
+        {glossaryOpen && (
+          <div className="px-4 pb-4 pt-1 grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-[#1F2937]">
+            <div className="p-3 rounded-xl bg-[#0B0F17] border border-[#1F2937]">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-bold text-slate-200">Kelly Birimi (1.0–5.0)</p>
+                <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 text-[10px] font-bold mono-nums">
+                  Kasa Ölçeği
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">
+                Oran avantajı ve güven skoruna göre tek maça ayrılması önerilen kasa ağırlığını gösterir.
+              </p>
+            </div>
+            <div className="p-3 rounded-xl bg-[#0B0F17] border border-[#1F2937]">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-bold text-slate-200">ClubElo Güç Puanı</p>
+                <span className="px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-400 text-[10px] font-bold mono-nums">
+                  Elo
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">
+                Avrupa kulüplerinin lig zorluğu ve uzun vadeli maç sonuçlarına göre hesaplanan güç reytingidir.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

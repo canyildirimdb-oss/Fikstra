@@ -1,4 +1,4 @@
-import { formatMarketLabel } from "./format";
+import { formatPickWithTeam, formatTurkishDate } from "./format";
 
 export interface ShareCouponLeg {
   league?: string;
@@ -54,6 +54,19 @@ function drawRoundRect(
   ctx.lineTo(x, y + r);
   ctx.quadraticCurveTo(x, y, x + r, y);
   ctx.closePath();
+}
+
+function truncateByWidth(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+): string {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let trimmed = text;
+  while (trimmed.length > 1 && ctx.measureText(`${trimmed}…`).width > maxWidth) {
+    trimmed = trimmed.slice(0, -1);
+  }
+  return `${trimmed}…`;
 }
 
 function teamInitials(name: string): string {
@@ -155,7 +168,7 @@ export async function generateCouponSharePng(
   const headerH = 112;
   const rowH = 92;
   const rowGap = 12;
-  const footerH = 68;
+  const footerH = 84;
   const padX = 24;
   const height = headerH + payload.items.length * (rowH + rowGap) + footerH + 16;
 
@@ -218,7 +231,7 @@ export async function generateCouponSharePng(
 
   ctx.fillStyle = "#94A3B8";
   ctx.font = "500 12px Inter, system-ui, sans-serif";
-  ctx.fillText(payload.couponDate, padX, 74);
+  ctx.fillText(formatTurkishDate(payload.couponDate), padX, 74);
 
   // Header right: Total odd
   ctx.textAlign = "right";
@@ -276,9 +289,8 @@ export async function generateCouponSharePng(
     ctx.fillStyle = "#F1F5F9";
     ctx.font = "700 13px Inter, system-ui, sans-serif";
     const matchLabel = `${it.home_team} - ${it.away_team}`;
-    const maxLen = hasScore ? 34 : 42;
-    const trimmedMatch = matchLabel.length > maxLen ? matchLabel.slice(0, maxLen - 1) + "…" : matchLabel;
-    ctx.fillText(trimmedMatch, padX + 78, curY + 43);
+    const maxMatchW = hasScore ? width - padX * 2 - 150 : width - padX * 2 - 92;
+    ctx.fillText(truncateByWidth(ctx, matchLabel, maxMatchW), padX + 78, curY + 43);
 
     if (hasScore) {
       ctx.textAlign = "right";
@@ -288,11 +300,11 @@ export async function generateCouponSharePng(
       ctx.textAlign = "left";
     }
 
-    // Pick + Odd + Result/Confidence
-    const pickStr = formatMarketLabel(it.market_key, it.selection_key);
+    // Pick (with team name for MS 1/2) + Odd + Result/Confidence
+    const pickStr = formatPickWithTeam(it.market_key, it.selection_key, it.home_team, it.away_team);
     ctx.fillStyle = theme.text;
     ctx.font = "700 13px Inter, system-ui, sans-serif";
-    ctx.fillText(pickStr, padX + 14, curY + 72);
+    ctx.fillText(truncateByWidth(ctx, pickStr, width - padX * 2 - 180), padX + 14, curY + 72);
 
     ctx.textAlign = "right";
     if (it.leg_result === "WON" || it.leg_result === "LOST") {
@@ -322,21 +334,33 @@ export async function generateCouponSharePng(
   ctx.lineTo(width - padX, footY);
   ctx.stroke();
 
-  // Bottom-left: Fikstra icon + "Fikstra" signature
-  drawFikstraLogo(ctx, padX, footY + 14, 28);
+  // Bottom-left: Fikstra icon + signature + tagline
+  drawFikstraLogo(ctx, padX, footY + 12, 28);
   ctx.fillStyle = "#F8FAFC";
-  ctx.font = "800 15px Inter, system-ui, sans-serif";
+  ctx.font = "800 14px Inter, system-ui, sans-serif";
   ctx.textBaseline = "middle";
-  ctx.fillText("Fikstra", padX + 36, footY + 28);
+  ctx.fillText("Fikstra", padX + 36, footY + 20);
+  ctx.fillStyle = "#34D399";
+  ctx.font = "500 10px Inter, system-ui, sans-serif";
+  ctx.fillText("Veriyle Okunan Maçlar", padX + 36, footY + 34);
 
-  // Bottom-right: Avg confidence out of 100
+  // Bottom-right: Domain & Avg confidence
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#E2E8F0";
+  ctx.font = "600 11px 'JetBrains Mono', monospace";
+  ctx.fillText("fikstra.onrender.com", width - padX, footY + 20);
   if (payload.avgConfidence != null) {
-    ctx.textAlign = "right";
     ctx.fillStyle = "#94A3B8";
-    ctx.font = "600 12px 'JetBrains Mono', monospace";
-    ctx.fillText(`Ort. Güven: ${payload.avgConfidence.toFixed(1)} / 100`, width - padX, footY + 28);
-    ctx.textAlign = "left";
+    ctx.font = "500 11px 'JetBrains Mono', monospace";
+    ctx.fillText(`Ort. Güven: ${payload.avgConfidence.toFixed(1)} / 100`, width - padX, footY + 35);
   }
+
+  // Disclaimer note
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#64748B";
+  ctx.font = "500 10px Inter, system-ui, sans-serif";
+  ctx.fillText("Tahmindir, garanti değildir · 18+", width / 2, footY + 58);
+  ctx.textAlign = "left";
 
   const dataUrl = canvas.toDataURL("image/png");
   const blob: Blob = await new Promise((resolve, reject) => {
