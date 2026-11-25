@@ -69,9 +69,13 @@ def cleanup_multi_market_settled_predictions(db: Session) -> int:
     counted in performance/archive. Legacy multi-market WON/LOST rows for the same match
     are demoted (is_top_pick=False, and marked VOID if not referenced by a CouponItem).
     """
+    cutoff_3d = datetime.now(timezone.utc) - timedelta(days=3)
     settled_rows = (
         db.query(Prediction)
-        .filter(Prediction.status.in_(["WON", "LOST"]))
+        .filter(
+            Prediction.status.in_(["WON", "LOST"]),
+            Prediction.settled_at >= cutoff_3d,
+        )
         .all()
     )
     if not settled_rows:
@@ -143,6 +147,9 @@ def settle_coupons(db: Session) -> int:
     for coupon in pending_coupons:
         statuses = [item.prediction.status for item in coupon.items if item.prediction]
         if not statuses:
+            coupon.status = "VOID"
+            coupon.total_odd = 1.0
+            settled_coupons += 1
             continue
         if "LOST" in statuses:
             coupon.status = "LOST"
@@ -156,7 +163,7 @@ def settle_coupons(db: Session) -> int:
         elif all(s in ("WON", "VOID") for s in statuses):
             coupon.status = "WON"
             effective_odds = [
-                item.prediction.iddaa_odd
+                (item.odd_at_pick if item.odd_at_pick is not None else item.prediction.iddaa_odd)
                 for item in coupon.items
                 if item.prediction and item.prediction.status != "VOID"
             ]

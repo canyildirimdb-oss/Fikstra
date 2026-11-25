@@ -4,9 +4,10 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Match, MatchContext, OddsCurrent, OddsHistory, Prediction
+from app.models import CouponItem, Match, MatchContext, OddsCurrent, OddsHistory, Prediction
 
 MIN_ODD_RULE = 1.30
 MAX_HIGHLIGHT_ODD = 4.00
@@ -184,13 +185,13 @@ def _compute_dixon_coles_probs(
     lam_h = round(max(0.30, min(3.6, lam_h)), 2)
     lam_a = round(max(0.25, min(3.2, lam_a)), 2)
 
-    p_home = [_poisson_pmf(i, lam_h) for i in range(7)]
-    p_away = [_poisson_pmf(j, lam_a) for j in range(7)]
+    p_home = [_poisson_pmf(i, lam_h) for i in range(10)]
+    p_away = [_poisson_pmf(j, lam_a) for j in range(10)]
 
-    matrix = [[0.0] * 7 for _ in range(7)]
+    matrix = [[0.0] * 10 for _ in range(10)]
     total_mass = 0.0
-    for i in range(7):
-        for j in range(7):
+    for i in range(10):
+        for j in range(10):
             tau = 1.0
             if i == 0 and j == 0:
                 tau = max(0.1, 1.0 - lam_h * lam_a * DIXON_COLES_RHO)
@@ -209,8 +210,8 @@ def _compute_dixon_coles_probs(
         return {"probs": None, "raw_xg_h": round(raw_lam_h, 2), "raw_xg_a": round(raw_lam_a, 2), "adj_xg_h": lam_h, "adj_xg_a": lam_a}
 
     p1 = px = p2 = p_u15 = p_u25 = p_u35 = p_kg = 0.0
-    for i in range(7):
-        for j in range(7):
+    for i in range(10):
+        for j in range(10):
             p = matrix[i][j] / total_mass
             if i > j:
                 p1 += p
@@ -298,20 +299,77 @@ def _is_high_risk_pick(market_key: str, selection_key: str, true_prob: float, id
     return False
 
 
+_EXPECTED_MARKET_OUTCOMES: dict[str, tuple[str, ...]] = {
+    "MS": ("1", "X", "2"),
+    "AU_15": ("UST", "ALT"),
+    "AU_25": ("UST", "ALT"),
+    "AU_35": ("UST", "ALT"),
+    "KG": ("VAR", "YOK"),
+}
+
+
+def _devig(market_key: str, odds_map: dict[tuple[str, str], OddsCurrent]) -> dict[str, float]:
+    """
+    Compute de-vigged implied probabilities for a market:
+    - MS requires all 3 outcomes (1, X, 2); AU_*/KG require 2 outcomes. Incomplete groups are NOT de-vigged.
+    - CS (1X, 12, X2) is NEVER de-vigged from its 3-way sum; it is derived from de-vigged MS probabilities.
+    """
+    if market_key == "CS":
+        ms_probs = _devig("MS", odds_map)
+        if "1" in ms_probs and "X" in ms_probs and "2" in ms_probs:
+            return {
+                "1X": min(0.99, ms_probs["1"] + ms_probs["X"]),
+                "12": min(0.99, ms_probs["1"] + ms_probs["2"]),
+                "X2": min(0.99, ms_probs["X"] + ms_probs["2"]),
+            }
+        # Fallback if MS is incomplete: raw implied probability without 3-way CS overround
+        out_cs: dict[str, float] = {}
+        for sk in ("1X", "12", "X2"):
+            o = odds_map.get(("CS", sk))
+            if o:
+                ref = o.global_avg_odd if (o.global_avg_odd and o.global_avg_odd > 1.0) else o.iddaa_odd
+                if ref and ref > 1.0:
+                    out_cs[sk] = min(0.95, 1.0 / ref)
+        return out_cs
+
+    expected = _EXPECTED_MARKET_OUTCOMES.get(market_key, ())
+    if expected:
+        objs = [odds_map.get((market_key, k)) for k in expected]
+        if all(o is not None and o.global_avg_odd and o.global_avg_odd > 1.0 for o in objs):
+            overround = sum(1.0 / o.global_avg_odd for o in objs if o is not None and o.global_avg_odd)
+            if overround > 0:
+                return {
+                    k: (1.0 / odds_map[(market_key, k)].global_avg_odd) / overround  # type: ignore[operator]
+                    for k in expected
+                }
+        if all(o is not None and o.iddaa_odd and o.iddaa_odd > 1.0 for o in objs):
+            overround = sum(1.0 / o.iddaa_odd for o in objs if o is not None)
+            if overround > 0:
+                return {k: (1.0 / odds_map[(market_key, k)].iddaa_odd) / overround for k in expected}
+
+    # Incomplete group: do not de-vig
+    out: dict[str, float] = {}
+    for (mk, sk), o in odds_map.items():
+        if mk != market_key:
+            continue
+        ref = o.global_avg_odd if (o.global_avg_odd and o.global_avg_odd > 1.0) else o.iddaa_odd
+        if ref and ref > 1.0:
+            out[sk] = min(0.95, 1.0 / ref)
+    return out
+
+
 def _compute_value_component(
     odd: OddsCurrent,
-    market_odds: list[OddsCurrent],
+    odds_map: dict[tuple[str, str], OddsCurrent],
     calibrated_prob: Optional[float],
     true_prob: Optional[float] = None,
 ) -> tuple[float, float, Optional[float], Optional[float], bool]:
-    global_group = [o.global_avg_odd for o in market_odds if o.global_avg_odd and o.global_avg_odd > 1.0]
-    if odd.global_avg_odd and len(global_group) >= 2:
-        overround = sum(1.0 / g for g in global_group)
-        true_prob = (1.0 / odd.global_avg_odd) / overround if overround > 0 else (1.0 / odd.global_avg_odd)
-    else:
-        iddaa_group = [o.iddaa_odd for o in market_odds if o.iddaa_odd > 1.0]
-        overround = sum(1.0 / i for i in iddaa_group) if len(iddaa_group) >= 2 else 1.10
-        true_prob = (1.0 / odd.iddaa_odd) / overround if overround > 0 else (1.0 / odd.iddaa_odd)
+    if true_prob is None:
+        devigged = _devig(odd.market_key, odds_map)
+        true_prob = devigged.get(odd.selection_key)
+        if true_prob is None:
+            ref = odd.global_avg_odd if (odd.global_avg_odd and odd.global_avg_odd > 1.0) else odd.iddaa_odd
+            true_prob = min(0.95, 1.0 / ref) if ref and ref > 1.0 else 0.5
 
     prob_pts = min(16.5, true_prob * 23.0)
     value_edge_pct: Optional[float] = None
@@ -501,7 +559,7 @@ def _compute_injury_component(
     data_status: str = "",
 ) -> tuple[float, bool]:
     if not ctx or not ctx.injuries_json or "tm_injuries" not in (data_status or ""):
-        return 8.0, False
+        return 12.0, False
 
     inj = json.loads(ctx.injuries_json)
     h_list = inj.get("home") or []
@@ -509,10 +567,10 @@ def _compute_injury_component(
     h_cnt = sum(_fresh_injury_weight(item) for item in h_list)
     a_cnt = sum(_fresh_injury_weight(item) for item in a_list)
     if h_cnt == 0 and a_cnt == 0:
-        return 8.0, False
+        return 12.0, False
 
     warning = h_cnt >= 2.5 or a_cnt >= 2.5
-    score = 15.0
+    score = 12.0
 
     backing_home = (market_key == "MS" and selection_key == "1") or (market_key == "CS" and selection_key == "1X")
     backing_away = (market_key == "MS" and selection_key == "2") or (market_key == "CS" and selection_key == "X2")
@@ -535,7 +593,7 @@ def _compute_injury_component(
     else:
         score -= min(4.5, (h_cnt + a_cnt) * 0.45)
 
-    return round(max(4.0, score), 1), warning
+    return round(max(0.0, score), 1), warning
 
 
 def _quarter_kelly_units(
@@ -566,15 +624,11 @@ def _quarter_kelly_units(
     else:
         base_units = 3.3 + min(1.0, (confidence - 73.0) * 0.10)
 
-    # Margin-adjusted fair odd (strip ~14% iddaa overround)
-    fair_odd = odd_val * 1.14
-    if global_odd and global_odd > 1.0:
-        fair_odd = max(fair_odd, global_odd * 1.04)
-
-    b_fair = fair_odd - 1.0
+    # Real payout b = odd_val - 1.0 (no artificial 1.14 inflation)
+    b = odd_val - 1.0
     kelly_boost = 0.0
-    if b_fair > 0:
-        raw_k = (b_fair * blended_prob - (1.0 - blended_prob)) / b_fair
+    if b > 0:
+        raw_k = (b * blended_prob - (1.0 - blended_prob)) / b
         q_kelly = 0.25 * max(0.0, raw_k)
         kelly_boost = min(0.90, q_kelly * 14.0)
 
@@ -638,26 +692,26 @@ def analyze_upcoming_matches(db: Session) -> int:
                     Prediction.market_key == odd.market_key,
                     Prediction.selection_key == odd.selection_key,
                     Prediction.status == "PENDING",
-                ).delete()
+                    ~Prediction.id.in_(select(CouponItem.prediction_id)),
+                ).delete(synchronize_session=False)
                 continue
 
             p_prob = poisson_map.get((odd.market_key, odd.selection_key)) if poisson_map else None
             # Compute de-vigged market probability first for Bayesian calibration
-            mkt_odds = by_market[odd.market_key]
-            g_grp = [o.global_avg_odd for o in mkt_odds if o.global_avg_odd and o.global_avg_odd > 1.0]
-            if odd.global_avg_odd and len(g_grp) >= 2:
-                ovr = sum(1.0 / g for g in g_grp)
-                mkt_true_prob = (1.0 / odd.global_avg_odd) / ovr if ovr > 0 else (1.0 / odd.global_avg_odd)
-            else:
-                i_grp = [o.iddaa_odd for o in mkt_odds if o.iddaa_odd > 1.0]
-                ovr = sum(1.0 / i for i in i_grp) if len(i_grp) >= 2 else 1.10
-                mkt_true_prob = (1.0 / odd.iddaa_odd) / ovr if ovr > 0 else (1.0 / odd.iddaa_odd)
+            devigged_probs = _devig(odd.market_key, all_odds_map)
+            mkt_true_prob = devigged_probs.get(odd.selection_key)
+            if mkt_true_prob is None:
+                ref = odd.global_avg_odd if (odd.global_avg_odd and odd.global_avg_odd > 1.0) else odd.iddaa_odd
+                mkt_true_prob = min(0.95, 1.0 / ref) if ref and ref > 1.0 else 0.5
 
             sparse = _is_sparse_data(ctx, odd)
             calibrated_prob = _calibrate_market_prob(odd.market_key, mkt_true_prob, p_prob, sparse)
 
             val_s, true_prob, edge_pct, p_edge, conflict_flag = _compute_value_component(
-                odd, mkt_odds, calibrated_prob if p_prob is not None else None
+                odd,
+                all_odds_map,
+                calibrated_prob if p_prob is not None else None,
+                true_prob=mkt_true_prob,
             )
             blended_prob = calibrated_prob
 
@@ -801,6 +855,7 @@ def analyze_upcoming_matches(db: Session) -> int:
                 updated_count += 1
 
         # Mark exactly one official #1 top pick per match (frozen once match starts/settles)
+        db.flush()
         pending_for_match = (
             db.query(Prediction)
             .filter(Prediction.match_id == match.id, Prediction.status == "PENDING")
@@ -829,7 +884,15 @@ def analyze_upcoming_matches(db: Session) -> int:
                 ),
             )
             for p in pending_for_match:
-                p.is_top_pick = (p.id == best_pred.id) if (p.id is not None and best_pred.id is not None) else (p is best_pred)
+                is_best = (p.id == best_pred.id) if (p.id is not None and best_pred.id is not None) else (p is best_pred)
+                p.is_top_pick = is_best
+                if is_best and p.published_odd is None:
+                    bd_best = json.loads(p.score_breakdown_json) if p.score_breakdown_json else {}
+                    pub_prob_pct = bd_best.get("blended_prob_pct") or bd_best.get("true_prob_pct")
+                    p.published_odd = p.iddaa_odd
+                    p.published_confidence = p.confidence_score
+                    p.published_prob = round(float(pub_prob_pct) / 100.0, 4) if pub_prob_pct is not None else None
+                    p.published_at = now
 
     db.commit()
     return updated_count

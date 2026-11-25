@@ -15,6 +15,7 @@ MIN_REMAINING_CREDITS = 30
 ACTIVE_WINDOW_HOURS = 24
 
 REMAINING_CACHE_KEY = "odds_api:remaining_credits"
+QUOTA_PROBE_CACHE_KEY = "odds_api:quota_probe_at"
 
 # Map our Turkish/iddaa league names to The Odds API sport keys
 LEAGUE_TO_ODDS_API_SPORT = {
@@ -167,6 +168,26 @@ def sync_the_odds_api(db: Session) -> dict[str, Any]:
     events_by_sport: dict[str, list[dict[str, Any]]] = {}
 
     with httpx.Client(timeout=12.0) as client:
+        # If locked by <=30 credits, probe free /v4/sports once every 24h to detect monthly quota reset
+        if remaining_credits is not None and remaining_credits <= MIN_REMAINING_CREDITS:
+            probed = get_cached_json(db, QUOTA_PROBE_CACHE_KEY, ttl_hours=24.0)
+            if probed is None:
+                try:
+                    probe_resp = client.get(ODDS_API_BASE, params={"apiKey": api_key})
+                    set_cached_json(db, QUOTA_PROBE_CACHE_KEY, {"probed_at": now.isoformat()})
+                    rem_hdr = probe_resp.headers.get("x-requests-remaining")
+                    used_hdr = probe_resp.headers.get("x-requests-used")
+                    if rem_hdr is not None:
+                        remaining_credits = int(float(rem_hdr))
+                        set_cached_json(
+                            db,
+                            REMAINING_CACHE_KEY,
+                            {"remaining": remaining_credits, "used": used_hdr},
+                        )
+                    db.commit()
+                except Exception:
+                    pass
+
         for sk in sorted(sport_keys_needed):
             cache_key = f"odds_api:v1:{sk}"
             cached_events = get_cached_json(db, cache_key, ttl_hours=ODDS_CACHE_TTL_HOURS)
@@ -207,7 +228,9 @@ def sync_the_odds_api(db: Session) -> dict[str, Any]:
                     if isinstance(data, list):
                         events_by_sport[sk] = data
                         set_cached_json(db, cache_key, data)
+                db.commit()
             except Exception:
+                db.rollback()
                 continue
 
     # Build candidate list for team matching

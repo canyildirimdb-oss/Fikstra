@@ -1,22 +1,69 @@
+import hmac
 import json
+import os
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import ensure_schema, get_db
-from app.models import Coupon, Match, PushSubscription, ScraperCache, SyncLog
+from app.models import Coupon, CouponItem, Match, Prediction, PushSubscription, ScraperCache, SyncLog
 from app.routers.api import clear_api_cache, router as api_router
 from services.settlement import settle_coupons, settle_finished_matches
 from services.sync import is_sync_running, run_sync_pipeline
+
+_SETTLE_LOCK = threading.Lock()
+_PG_SETTLE_LOCK_KEY = 84729102
+_ALLOWED_PUSH_HOSTS = {
+    "fcm.googleapis.com",
+    "updates.push.services.mozilla.com",
+    "web.push.apple.com",
+}
+_ALLOWED_PUSH_SUFFIXES = (
+    ".notify.windows.com",
+    ".push.services.mozilla.com",
+    ".push.apple.com",
+)
+MAX_PUSH_SUBSCRIPTIONS = 500
+
+
+def _verify_cron_secret(x_cron_secret: Optional[str]) -> None:
+    secret = settings.cron_secret or ""
+    is_prod = bool(os.getenv("RENDER") or (not settings.resolved_database_url.startswith("sqlite")))
+    if not secret or (is_prod and secret.startswith("change-me")):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Cron secret not configured",
+        )
+    if not hmac.compare_digest(x_cron_secret or "", secret):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid cron secret",
+        )
+
+
+def _is_allowed_push_endpoint(endpoint: str) -> bool:
+    try:
+        parsed = urlparse((endpoint or "").strip())
+    except Exception:
+        return False
+    if parsed.scheme != "https" or not parsed.hostname:
+        return False
+    host = parsed.hostname.lower()
+    if host in _ALLOWED_PUSH_HOSTS:
+        return True
+    return any(host.endswith(suffix) for suffix in _ALLOWED_PUSH_SUFFIXES)
 
 
 @asynccontextmanager
@@ -34,7 +81,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -82,50 +129,79 @@ def trigger_cron_settle(
 ):
     """
     Lightweight, 0-Odds-API-credit settlement endpoint.
-    Only fetches external scores if there are unsettled matches started in the last 48h (and >=95m ago).
+    Only fetches external scores if there are unsettled matches with active predictions/coupons
+    started in the last 48h (and >=95m ago).
     """
-    if x_cron_secret != settings.cron_secret:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid cron secret",
+    _verify_cron_secret(x_cron_secret)
+
+    if not _SETTLE_LOCK.acquire(blocking=False):
+        return {"status": "already_running", "skipped_external": True, "settled_matches": 0, "odds_api_credits_used": 0}
+
+    is_pg = db.bind is not None and db.bind.dialect.name == "postgresql"
+    pg_locked = False
+    try:
+        if is_pg:
+            pg_locked = bool(db.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": _PG_SETTLE_LOCK_KEY}).scalar())
+            if not pg_locked:
+                return {"status": "already_running", "skipped_external": True, "settled_matches": 0, "odds_api_credits_used": 0}
+
+        now = datetime.now(timezone.utc)
+        window_start = now - timedelta(hours=48)
+        window_end = now - timedelta(minutes=95)
+        has_unsettled = (
+            db.query(Match.id)
+            .filter(
+                Match.start_time_utc >= window_start,
+                Match.start_time_utc <= window_end,
+                Match.status.notin_(["FINISHED", "VOID"]),
+                or_(
+                    Match.id.in_(db.query(Prediction.match_id).filter(Prediction.status == "PENDING")),
+                    Match.id.in_(
+                        db.query(Prediction.match_id)
+                        .join(CouponItem, CouponItem.prediction_id == Prediction.id)
+                        .join(Coupon, CouponItem.coupon_id == Coupon.id)
+                        .filter(Coupon.status == "PENDING")
+                    ),
+                ),
+            )
+            .first()
+            is not None
         )
 
-    now = datetime.now(timezone.utc)
-    window_end = now - timedelta(minutes=95)
-    has_unsettled = (
-        db.query(Match.id)
-        .filter(Match.start_time_utc <= window_end, Match.status.notin_(["FINISHED", "VOID"]))
-        .first()
-        is not None
-    )
+        settled_matches = 0
+        if has_unsettled:
+            settled_matches = settle_finished_matches(db)
+            settled_coupons = 0
+        else:
+            settled_coupons = settle_coupons(db)
+            if settled_coupons:
+                db.commit()
 
-    settled_matches = 0
-    if has_unsettled:
-        settled_matches = settle_finished_matches(db)
-        settled_coupons = 0
-    else:
-        settled_coupons = settle_coupons(db)
-        if settled_coupons:
-            db.commit()
+        if settled_matches or settled_coupons:
+            clear_api_cache()
 
-    if settled_matches or settled_coupons:
-        clear_api_cache()
+        payload = json.dumps({"settled_at": now.isoformat(), "settled_matches": settled_matches})
+        row = db.query(ScraperCache).filter(ScraperCache.cache_key == LAST_SETTLE_KEY).first()
+        if row:
+            row.payload_json = payload
+            row.updated_at = now
+        else:
+            db.add(ScraperCache(cache_key=LAST_SETTLE_KEY, payload_json=payload, updated_at=now))
+        db.commit()
 
-    payload = json.dumps({"settled_at": now.isoformat(), "settled_matches": settled_matches})
-    row = db.query(ScraperCache).filter(ScraperCache.cache_key == LAST_SETTLE_KEY).first()
-    if row:
-        row.payload_json = payload
-        row.updated_at = now
-    else:
-        db.add(ScraperCache(cache_key=LAST_SETTLE_KEY, payload_json=payload, updated_at=now))
-    db.commit()
-
-    return {
-        "status": "ok",
-        "skipped_external": not has_unsettled,
-        "settled_matches": settled_matches,
-        "odds_api_credits_used": 0,
-    }
+        return {
+            "status": "ok",
+            "skipped_external": not has_unsettled,
+            "settled_matches": settled_matches,
+            "odds_api_credits_used": 0,
+        }
+    finally:
+        if is_pg and pg_locked:
+            try:
+                db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _PG_SETTLE_LOCK_KEY})
+            except Exception:
+                pass
+        _SETTLE_LOCK.release()
 
 
 @app.api_route("/api/cron/sync", methods=["GET", "POST"], status_code=status.HTTP_202_ACCEPTED)
@@ -135,11 +211,7 @@ def trigger_cron_sync(
     x_cron_secret: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    if x_cron_secret != settings.cron_secret:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid cron secret",
-        )
+    _verify_cron_secret(x_cron_secret)
 
     if is_sync_running(db):
         response.status_code = status.HTTP_200_OK
@@ -171,6 +243,11 @@ def get_vapid_public_key():
 
 @app.post("/api/push/subscribe")
 def subscribe_push(payload: PushSubscribeIn, db: Session = Depends(get_db)):
+    if not _is_allowed_push_endpoint(payload.endpoint):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported push endpoint",
+        )
     existing = (
         db.query(PushSubscription)
         .filter(PushSubscription.endpoint == payload.endpoint)
@@ -180,6 +257,11 @@ def subscribe_push(payload: PushSubscribeIn, db: Session = Depends(get_db)):
         existing.p256dh = payload.p256dh
         existing.auth = payload.auth
     else:
+        if db.query(PushSubscription).count() >= MAX_PUSH_SUBSCRIPTIONS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Push subscription limit reached",
+            )
         db.add(
             PushSubscription(
                 endpoint=payload.endpoint,
@@ -200,7 +282,10 @@ if FRONTEND_DIST.exists():
 
     @app.get("/{full_path:path}")
     def serve_spa(full_path: str):
-        candidate = FRONTEND_DIST / full_path
+        dist_root = FRONTEND_DIST.resolve()
+        candidate = (dist_root / full_path).resolve()
+        if not candidate.is_relative_to(dist_root):
+            raise HTTPException(status_code=404, detail="Not found")
         if full_path and candidate.exists() and candidate.is_file():
             return FileResponse(candidate)
-        return FileResponse(FRONTEND_DIST / "index.html")
+        return FileResponse(dist_root / "index.html")

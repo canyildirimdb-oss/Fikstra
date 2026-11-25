@@ -5,13 +5,16 @@ from app.config import settings
 
 db_url = settings.resolved_database_url
 is_sqlite = db_url.startswith("sqlite")
-connect_args = {"check_same_thread": False} if is_sqlite else {}
+connect_args: dict = {"check_same_thread": False} if is_sqlite else {"connect_timeout": 10}
 engine_kwargs: dict = {
     "connect_args": connect_args,
     "pool_pre_ping": True,
 }
 if not is_sqlite:
     engine_kwargs["pool_recycle"] = 300
+    engine_kwargs["pool_size"] = 3
+    engine_kwargs["max_overflow"] = 2
+    engine_kwargs["pool_timeout"] = 20
 
 engine = create_engine(db_url, **engine_kwargs)
 
@@ -69,9 +72,16 @@ def ensure_schema():
             ("kelly_units", "FLOAT"),
             ("trap_warning", "BOOLEAN DEFAULT FALSE"),
             ("is_top_pick", "BOOLEAN DEFAULT FALSE"),
+            ("published_odd", "FLOAT"),
+            ("published_confidence", "FLOAT"),
+            ("published_prob", "FLOAT"),
+            ("published_at", "TIMESTAMP"),
         ],
         "coupons": [
             ("is_locked", "BOOLEAN DEFAULT FALSE"),
+        ],
+        "coupon_items": [
+            ("odd_at_pick", "FLOAT"),
         ],
     }
 
@@ -85,6 +95,25 @@ def ensure_schema():
                 sql_type = "TIMESTAMPTZ" if (is_pg and col_type == "TIMESTAMP") else col_type
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN {col_name} {sql_type}"))
+
+    # Ensure coupon_items.prediction_id uses ON DELETE RESTRICT on PostgreSQL
+    if is_pg and "coupon_items" in tables:
+        try:
+            for fk in insp.get_foreign_keys("coupon_items"):
+                if fk.get("constrained_columns") == ["prediction_id"]:
+                    on_del = (fk.get("options") or {}).get("ondelete", "").upper()
+                    fk_name = fk.get("name")
+                    if fk_name and on_del != "RESTRICT":
+                        with engine.begin() as conn:
+                            conn.execute(text(f'ALTER TABLE coupon_items DROP CONSTRAINT "{fk_name}"'))
+                            conn.execute(
+                                text(
+                                    'ALTER TABLE coupon_items ADD CONSTRAINT "coupon_items_prediction_id_fkey" '
+                                    'FOREIGN KEY (prediction_id) REFERENCES predictions(id) ON DELETE RESTRICT'
+                                )
+                            )
+        except Exception:
+            pass
 
     # Performance indexes (PostgreSQL & SQLite compatible)
     index_stmts = [

@@ -167,6 +167,10 @@ class Prediction(Base):
     kelly_units: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     trap_warning: Mapped[bool] = mapped_column(Boolean, default=False)
     is_top_pick: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    published_odd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    published_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    published_prob: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(24), default="PENDING", index=True)
     settled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -199,7 +203,8 @@ class CouponItem(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     coupon_id: Mapped[int] = mapped_column(ForeignKey("coupons.id", ondelete="CASCADE"), index=True)
-    prediction_id: Mapped[int] = mapped_column(ForeignKey("predictions.id", ondelete="CASCADE"))
+    prediction_id: Mapped[int] = mapped_column(ForeignKey("predictions.id", ondelete="RESTRICT"))
+    odd_at_pick: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     coupon: Mapped["Coupon"] = relationship(back_populates="items")
     prediction: Mapped["Prediction"] = relationship()

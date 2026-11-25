@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
@@ -31,6 +31,7 @@ from utils.time_utils import is_tr_today_or_next_24h, to_tr_datetime, tr_now, tr
 router = APIRouter(prefix="/api", tags=["api"])
 
 API_CACHE_TTL_SEC = 60.0
+API_CACHE_MAX_ENTRIES = 200
 _API_CACHE: dict[str, tuple[float, Any]] = {}
 _API_CACHE_LOCK = threading.Lock()
 
@@ -50,11 +51,18 @@ def _cache_get(key: str) -> Any:
         if now > exp:
             _API_CACHE.pop(key, None)
             return None
+        # Refresh LRU position
+        _API_CACHE[key] = _API_CACHE.pop(key)
         return val
 
 
 def _cache_set(key: str, val: Any, ttl: float = API_CACHE_TTL_SEC) -> Any:
     with _API_CACHE_LOCK:
+        if key in _API_CACHE:
+            _API_CACHE.pop(key, None)
+        while len(_API_CACHE) >= API_CACHE_MAX_ENTRIES:
+            oldest_key = next(iter(_API_CACHE))
+            _API_CACHE.pop(oldest_key, None)
         _API_CACHE[key] = (time.monotonic() + ttl, val)
     return val
 
@@ -157,10 +165,7 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
         .filter(
             Prediction.status.in_(["WON", "LOST"]),
             Prediction.is_top_pick.is_(True),
-            or_(
-                Prediction.confidence_score >= 60.0,
-                Prediction.id.in_(db.query(CouponItem.prediction_id)),
-            ),
+            func.coalesce(Prediction.published_confidence, Prediction.confidence_score) >= 60.0,
         )
         .order_by(Prediction.settled_at.desc(), Prediction.confidence_score.desc())
         .all()
@@ -263,7 +268,11 @@ def get_predictions(
     limit: int = Query(default=60, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    cache_key = f"predictions:{today_only}:{major_only}:{min_odd}:{min_confidence}:{market or ''}:{(search or '').strip().lower()}:{limit}"
+    norm_search = " ".join((search or "").strip().lower().split())[:64]
+    cache_key = (
+        f"predictions:{today_only}:{major_only}:{round(min_odd, 2)}:{round(min_confidence, 1)}:"
+        f"{(market or '').strip().upper()}:{norm_search}:{limit}"
+    )
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
@@ -535,8 +544,8 @@ def _serialize_coupon(c: Coupon, now_utc: datetime) -> dict:
             "start_time_tr": tr_dt.strftime("%H:%M"),
             "market_key": p.market_key,
             "selection_key": p.selection_key,
-            "iddaa_odd": p.iddaa_odd,
-            "confidence_score": p.confidence_score,
+            "iddaa_odd": item.odd_at_pick if item.odd_at_pick is not None else p.iddaa_odd,
+            "confidence_score": p.published_confidence if p.published_confidence is not None else p.confidence_score,
             "status": p.status,
             "match_status": m.status,
             "home_score": m.home_score,
@@ -647,10 +656,7 @@ def get_performance(db: Session = Depends(get_db)):
         .filter(
             Prediction.status.in_(["WON", "LOST"]),
             Prediction.is_top_pick.is_(True),
-            or_(
-                Prediction.confidence_score >= 60.0,
-                Prediction.id.in_(db.query(CouponItem.prediction_id)),
-            ),
+            func.coalesce(Prediction.published_confidence, Prediction.confidence_score) >= 60.0,
         )
         .order_by(Prediction.settled_at.desc(), Prediction.confidence_score.desc())
         .all()
@@ -696,8 +702,13 @@ def get_performance(db: Session = Depends(get_db)):
             "win_rate": round((c_won / len(cs)) * 100.0, 1) if cs else None,
         }
 
-    # CLV, Brier Score, and Confidence Band Calibration
-    clv_vals = [p.clv_pct for p in settled if p.clv_pct is not None]
+    # CLV, Brier Score, and Confidence Band Calibration (prefer write-once published_* snapshots)
+    clv_vals: list[float] = []
+    for p in settled:
+        if p.published_odd is not None and p.closing_odd and p.closing_odd > 1.0:
+            clv_vals.append(round(((p.published_odd / p.closing_odd) - 1.0) * 100.0, 2))
+        elif p.clv_pct is not None:
+            clv_vals.append(p.clv_pct)
     avg_clv_pct = round(sum(clv_vals) / len(clv_vals), 2) if clv_vals else None
 
     brier_terms = []
@@ -708,14 +719,18 @@ def get_performance(db: Session = Depends(get_db)):
     }
     for p in settled:
         outcome = 1.0 if p.status == "WON" else 0.0
-        bd = json.loads(p.score_breakdown_json) if p.score_breakdown_json else {}
-        prob_pct = bd.get("blended_prob_pct") or bd.get("true_prob_pct")
-        if prob_pct is not None:
-            prob = float(prob_pct) / 100.0
-            brier_terms.append((prob - outcome) ** 2)
+        if p.published_prob is not None:
+            brier_terms.append((float(p.published_prob) - outcome) ** 2)
+        else:
+            bd = json.loads(p.score_breakdown_json) if p.score_breakdown_json else {}
+            prob_pct = bd.get("blended_prob_pct") or bd.get("true_prob_pct")
+            if prob_pct is not None:
+                prob = float(prob_pct) / 100.0
+                brier_terms.append((prob - outcome) ** 2)
 
+        eff_conf = p.published_confidence if p.published_confidence is not None else p.confidence_score
         for b_cfg in bands.values():
-            if b_cfg["min"] <= p.confidence_score <= b_cfg["max"]:
+            if b_cfg["min"] <= eff_conf <= b_cfg["max"]:
                 b_cfg["total"] += 1
                 if p.status == "WON":
                     b_cfg["won"] += 1
@@ -742,8 +757,8 @@ def get_performance(db: Session = Depends(get_db)):
             "away_score": p.match.away_score,
             "market_key": p.market_key,
             "selection_key": p.selection_key,
-            "iddaa_odd": p.iddaa_odd,
-            "confidence_score": p.confidence_score,
+            "iddaa_odd": p.published_odd if p.published_odd is not None else p.iddaa_odd,
+            "confidence_score": p.published_confidence if p.published_confidence is not None else p.confidence_score,
             "status": p.status,
             "settled_at": p.settled_at.isoformat() if p.settled_at else None,
         }

@@ -5,9 +5,10 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.database import SessionLocal, ensure_schema
+from app.database import SessionLocal
 from app.models import Match, MatchContext, OddsCurrent, OddsHistory, Prediction, ScraperCache, SyncLog
 from scrapers.clubelo import load_clubelo_ratings, lookup_clubelo
 from scrapers.external_data import (
@@ -32,6 +33,7 @@ _SYNC_LOCK = threading.Lock()
 CONTEXT_CACHE_TTL = timedelta(hours=6)
 SYNC_LOCK_KEY = "system:sync_lock"
 SYNC_LOCK_STALE_MINUTES = 15
+_PG_SYNC_LOCK_KEY = 84729101
 
 
 def acquire_db_sync_lock(db: Session, now: Optional[datetime] = None) -> bool:
@@ -115,16 +117,33 @@ def run_sync_pipeline(
     if not _SYNC_LOCK.acquire(blocking=False):
         return {"status": "already_running"}
 
-    ensure_schema()
     db: Session = SessionLocal()
+    is_pg = db.bind is not None and db.bind.dialect.name == "postgresql"
+    pg_locked = False
     db_locked = False
     try:
+        if is_pg:
+            pg_locked = bool(db.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": _PG_SYNC_LOCK_KEY}).scalar())
+            if not pg_locked:
+                db.close()
+                _SYNC_LOCK.release()
+                return {"status": "already_running"}
         db_locked = acquire_db_sync_lock(db)
         if not db_locked:
+            if is_pg and pg_locked:
+                try:
+                    db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _PG_SYNC_LOCK_KEY})
+                except Exception:
+                    pass
             db.close()
             _SYNC_LOCK.release()
             return {"status": "already_running"}
     except Exception:
+        if is_pg and pg_locked:
+            try:
+                db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _PG_SYNC_LOCK_KEY})
+            except Exception:
+                pass
         db.close()
         _SYNC_LOCK.release()
         raise
@@ -490,8 +509,9 @@ def run_sync_pipeline(
                 .first()
             )
             if curr_o and curr_o.iddaa_odd > 1.0:
+                ref_odd = np.published_odd if np.published_odd is not None else np.iddaa_odd
                 np.closing_odd = curr_o.iddaa_odd
-                np.clv_pct = round(((np.iddaa_odd / curr_o.iddaa_odd) - 1.0) * 100.0, 2)
+                np.clv_pct = round(((ref_odd / curr_o.iddaa_odd) - 1.0) * 100.0, 2)
         db.commit()
 
         settled = settle_finished_matches(db, espn_events=espn_events)
@@ -567,6 +587,11 @@ def run_sync_pipeline(
         if db_locked:
             try:
                 release_db_sync_lock(db)
+            except Exception:
+                pass
+        if is_pg and pg_locked:
+            try:
+                db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _PG_SYNC_LOCK_KEY})
             except Exception:
                 pass
         db.close()

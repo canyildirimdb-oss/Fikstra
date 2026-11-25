@@ -1,6 +1,7 @@
 import json
 import re
 import statistics
+import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -27,8 +28,9 @@ ESPN_LEAGUES = [
     "uefa.europa.conf",
 ]
 
-# In-memory cache for Transfermarkt club injury lookups within a process run
-_TM_INJURY_CACHE: dict[str, list[dict[str, str]]] = {}
+# In-memory cache with 6h TTL for Transfermarkt club injury lookups
+_TM_INJURY_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_TM_CACHE_TTL_SEC = 6 * 3600.0
 
 
 def american_to_decimal(raw: Any) -> Optional[float]:
@@ -927,8 +929,11 @@ def fetch_transfermarkt_injuries(
     Returns (injuries_list, fetched_squad_live_bool).
     """
     key = team_name.strip().lower()
-    if key in _TM_INJURY_CACHE:
-        return filter_injuries_for_league(_TM_INJURY_CACHE[key], match_league), False
+    cached_entry = _TM_INJURY_CACHE.get(key)
+    if cached_entry is not None:
+        cached_ts, cached_items = cached_entry
+        if (time.monotonic() - cached_ts) < _TM_CACHE_TTL_SEC:
+            return filter_injuries_for_league(cached_items, match_league), False
 
     injuries: list[dict[str, Any]] = []
     fetched_squad_live = False
@@ -936,13 +941,12 @@ def fetch_transfermarkt_injuries(
         search_url = f"https://www.transfermarkt.com/schnellsuche/ergebnis/schnellsuche?query={quote_plus(team_name)}"
         rs = cffi_requests.get(search_url, impersonate="chrome120", timeout=timeout)
         if rs.status_code != 200:
-            _TM_INJURY_CACHE[key] = []
             return [], False
 
         soup = BeautifulSoup(rs.text, "html.parser")
         club_link = soup.select_one("a[href*='/startseite/verein/']")
         if not club_link or not club_link.get("href"):
-            _TM_INJURY_CACHE[key] = []
+            _TM_INJURY_CACHE[key] = (time.monotonic(), [])
             return [], False
 
         href = club_link["href"]
@@ -951,7 +955,6 @@ def fetch_transfermarkt_injuries(
 
         ri = cffi_requests.get(inj_url, impersonate="chrome120", timeout=timeout)
         if ri.status_code != 200:
-            _TM_INJURY_CACHE[key] = []
             return [], False
 
         soup_i = BeautifulSoup(ri.text, "html.parser")
@@ -1068,9 +1071,9 @@ def fetch_transfermarkt_injuries(
                     elif inj.get("market_value_eur") and total_eur > 0:
                         inj["squad_value_share_pct"] = round((inj["market_value_eur"] / total_eur) * 100.0, 2)
     except Exception:
-        pass
+        return [], False
 
-    _TM_INJURY_CACHE[key] = injuries
+    _TM_INJURY_CACHE[key] = (time.monotonic(), injuries)
     return filter_injuries_for_league(injuries, match_league), fetched_squad_live
 
 

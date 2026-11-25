@@ -1,3 +1,4 @@
+import json
 import math
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -190,32 +191,26 @@ def generate_daily_coupons(db: Session) -> list[Coupon]:
     frozen_tiers: set[str] = set()
     global_used_matches: set[int] = set()
 
-    # Midnight carry-over lock: if the latest locked/started coupon for a tier is still PENDING
-    # (from yesterday or earlier), keep it active and do NOT overwrite or generate a new one today.
-    for tier_name in ("BANKO", "DENGELI", "SURPRIZ"):
-        pending_carry = (
-            db.query(Coupon)
-            .filter(Coupon.tier == tier_name, Coupon.status == "PENDING")
-            .order_by(Coupon.coupon_date.desc(), Coupon.id.desc())
-            .first()
-        )
-        if pending_carry and (
-            pending_carry.is_locked or _should_freeze_coupon(pending_carry, now_utc)
+    # Carry-over & freeze protection across ALL PENDING coupons in the DB:
+    # Any locked, started, or previous-day PENDING coupon is preserved and its matches
+    # are added to global_used_matches so they are never duplicated in new coupons.
+    all_pending_coupons = (
+        db.query(Coupon)
+        .filter(Coupon.status == "PENDING")
+        .order_by(Coupon.coupon_date.desc(), Coupon.id.desc())
+        .all()
+    )
+    for pending_c in all_pending_coupons:
+        if (
+            pending_c.is_locked
+            or pending_c.coupon_date != today_str
+            or _should_freeze_coupon(pending_c, now_utc)
         ):
-            pending_carry.is_locked = True
-            existing_by_tier[tier_name] = pending_carry
-            frozen_tiers.add(tier_name)
-            for item in pending_carry.items:
-                if item.prediction:
-                    global_used_matches.add(item.prediction.match_id)
-
-    for tier, c in existing_by_tier.items():
-        if tier in frozen_tiers:
-            continue
-        if _should_freeze_coupon(c, now_utc):
-            c.is_locked = True
-            frozen_tiers.add(tier)
-            for item in c.items:
+            pending_c.is_locked = True
+            frozen_tiers.add(pending_c.tier)
+            if pending_c.tier not in existing_by_tier or pending_c.coupon_date == today_str:
+                existing_by_tier[pending_c.tier] = pending_c
+            for item in pending_c.items:
                 if item.prediction:
                     global_used_matches.add(item.prediction.match_id)
 
@@ -245,8 +240,13 @@ def generate_daily_coupons(db: Session) -> list[Coupon]:
     match_pick_conf: dict[tuple[int, str, str], float] = {}
     for mp in all_match_preds:
         match_pick_conf[(mp.match_id, mp.market_key, mp.selection_key)] = mp.confidence_score
-        prev = top_pick_by_match.get(mp.match_id)
-        if prev is None or mp.confidence_score > prev.confidence_score:
+        if mp.is_top_pick:
+            top_pick_by_match[mp.match_id] = mp
+    # Fallback only if a match has no official is_top_pick flag yet
+    for mp in all_match_preds:
+        if mp.match_id not in top_pick_by_match:
+            top_pick_by_match[mp.match_id] = mp
+        elif not top_pick_by_match[mp.match_id].is_top_pick and mp.confidence_score > top_pick_by_match[mp.match_id].confidence_score:
             top_pick_by_match[mp.match_id] = mp
 
     top_pick_ids: set[int] = {p.id for p in top_pick_by_match.values()}
@@ -308,9 +308,16 @@ def generate_daily_coupons(db: Session) -> list[Coupon]:
 
         for p in picked:
             global_used_matches.add(p.match_id)
+            if p.published_odd is None:
+                bd = json.loads(p.score_breakdown_json) if p.score_breakdown_json else {}
+                pub_prob_pct = bd.get("blended_prob_pct") or bd.get("true_prob_pct")
+                p.published_odd = p.iddaa_odd
+                p.published_confidence = p.confidence_score
+                p.published_prob = round(float(pub_prob_pct) / 100.0, 4) if pub_prob_pct is not None else None
+                p.published_at = now_utc
 
-        total_odd = round(math.prod(p.iddaa_odd for p in picked), 2)
-        avg_conf = round(sum(p.confidence_score for p in picked) / len(picked), 1)
+        total_odd = round(math.prod((p.published_odd or p.iddaa_odd) for p in picked), 2)
+        avg_conf = round(sum((p.published_confidence if p.published_confidence is not None else p.confidence_score) for p in picked) / len(picked), 1)
 
         existing = existing_by_tier.get(tier)
         if not existing:
@@ -331,7 +338,13 @@ def generate_daily_coupons(db: Session) -> list[Coupon]:
             db.query(CouponItem).filter(CouponItem.coupon_id == coupon.id).delete()
 
         for p in picked:
-            db.add(CouponItem(coupon_id=coupon.id, prediction_id=p.id))
+            db.add(
+                CouponItem(
+                    coupon_id=coupon.id,
+                    prediction_id=p.id,
+                    odd_at_pick=p.published_odd if p.published_odd is not None else p.iddaa_odd,
+                )
+            )
 
         created_or_updated.append(coupon)
 

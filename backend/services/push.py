@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Any
 
 from pywebpush import WebPushException, webpush
@@ -7,6 +8,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import Coupon, Match, NotificationLog, Prediction, PushSubscription
 from utils.time_utils import tr_today_str
+
+logger = logging.getLogger(__name__)
 
 
 def send_push_notification(
@@ -37,11 +40,14 @@ def send_push_notification(
                     data=payload,
                     vapid_private_key=settings.vapid_private_key,
                     vapid_claims={"sub": settings.vapid_subject},
+                    timeout=8,
                 )
                 sent_count += 1
             except WebPushException as exc:
                 if exc.response is not None and exc.response.status_code in (404, 410):
                     db.delete(sub)
+            except Exception as exc:
+                logger.warning("[Fikstra Push] Failed sending to %s: %s", sub.endpoint[:60], exc)
 
     db.add(
         NotificationLog(
