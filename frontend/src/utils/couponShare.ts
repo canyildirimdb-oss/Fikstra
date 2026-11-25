@@ -1,0 +1,307 @@
+import { formatMarketLabel } from "./format";
+
+export interface ShareCouponLeg {
+  league?: string;
+  start_time_tr?: string;
+  home_team: string;
+  away_team: string;
+  home_logo_url?: string | null;
+  away_logo_url?: string | null;
+  market_key: string;
+  selection_key: string;
+  iddaa_odd: number;
+  confidence_score?: number;
+}
+
+export interface ShareCouponPayload {
+  tier: "BANKO" | "DENGELI" | "SURPRIZ" | "CUSTOM";
+  title: string;
+  couponDate: string;
+  totalOdd: number;
+  avgConfidence?: number | null;
+  items: ShareCouponLeg[];
+  textPayload: string;
+}
+
+const TIER_ACCENT: Record<string, { primary: string; soft: string; text: string }> = {
+  BANKO: { primary: "#10B981", soft: "rgba(16, 185, 129, 0.16)", text: "#34D399" },
+  DENGELI: { primary: "#06B6D4", soft: "rgba(6, 182, 212, 0.16)", text: "#22D3EE" },
+  SURPRIZ: { primary: "#F59E0B", soft: "rgba(245, 158, 11, 0.16)", text: "#FBBF24" },
+  CUSTOM: { primary: "#10B981", soft: "rgba(16, 185, 129, 0.16)", text: "#34D399" },
+};
+
+function drawRoundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number
+) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function teamInitials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    return (words[0][0] + words[1][0]).toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+}
+
+async function loadCorsSafeBitmap(url?: string | null): Promise<ImageBitmap | null> {
+  if (!url) return null;
+  try {
+    const resp = await fetch(url, { mode: "cors" });
+    if (!resp.ok) return null;
+    const blob = await resp.blob();
+    return await createImageBitmap(blob);
+  } catch {
+    return null;
+  }
+}
+
+function drawTeamShield(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  size: number,
+  name: string,
+  bitmap: ImageBitmap | null,
+  accent: string
+) {
+  ctx.save();
+  drawRoundRect(ctx, x, y, size, size, 10);
+  ctx.fillStyle = "#090D16";
+  ctx.fill();
+  ctx.strokeStyle = "#1F2937";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.clip();
+
+  if (bitmap) {
+    const pad = 4;
+    ctx.drawImage(bitmap, x + pad, y + pad, size - pad * 2, size - pad * 2);
+  } else {
+    ctx.fillStyle = accent;
+    ctx.font = "700 13px Inter, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(teamInitials(name), x + size / 2, y + size / 2 + 1);
+  }
+  ctx.restore();
+}
+
+function drawFikstraLogo(ctx: CanvasRenderingContext2D, x: number, y: number, size: number) {
+  ctx.save();
+  drawRoundRect(ctx, x, y, size, size, size * 0.22);
+  const bg = ctx.createLinearGradient(x, y, x + size, y + size);
+  bg.addColorStop(0, "#0D1424");
+  bg.addColorStop(1, "#090D16");
+  ctx.fillStyle = bg;
+  ctx.fill();
+  ctx.strokeStyle = "rgba(16, 185, 129, 0.35)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  const s = size / 512;
+  const fg = ctx.createLinearGradient(x + 120 * s, y + 96 * s, x + 392 * s, y + 416 * s);
+  fg.addColorStop(0, "#34D399");
+  fg.addColorStop(0.55, "#10B981");
+  fg.addColorStop(1, "#06B6D4");
+  ctx.fillStyle = fg;
+
+  ctx.beginPath();
+  ctx.moveTo(x + 154 * s, y + 118 * s);
+  ctx.lineTo(x + 372 * s, y + 118 * s);
+  ctx.lineTo(x + 346 * s, y + 184 * s);
+  ctx.lineTo(x + 224 * s, y + 184 * s);
+  ctx.lineTo(x + 224 * s, y + 234 * s);
+  ctx.lineTo(x + 324 * s, y + 234 * s);
+  ctx.lineTo(x + 300 * s, y + 296 * s);
+  ctx.lineTo(x + 224 * s, y + 296 * s);
+  ctx.lineTo(x + 224 * s, y + 396 * s);
+  ctx.lineTo(x + 154 * s, y + 396 * s);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(x + 358 * s, y + 356 * s, 24 * s, 0, Math.PI * 2);
+  ctx.fillStyle = "#06B6D4";
+  ctx.fill();
+  ctx.restore();
+}
+
+export async function generateCouponSharePng(
+  payload: ShareCouponPayload
+): Promise<{ dataUrl: string; blob: Blob; filename: string }> {
+  const scale = 2;
+  const width = 540;
+  const headerH = 112;
+  const rowH = 92;
+  const rowGap = 12;
+  const footerH = 68;
+  const padX = 24;
+  const height = headerH + payload.items.length * (rowH + rowGap) + footerH + 16;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas 2D context unavailable");
+  ctx.scale(scale, scale);
+
+  const theme = TIER_ACCENT[payload.tier] || TIER_ACCENT.BANKO;
+
+  // Premium dark navy gradient background
+  const bg = ctx.createLinearGradient(0, 0, 0, height);
+  bg.addColorStop(0, "#090D16");
+  bg.addColorStop(1, "#0F172A");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, width, height);
+
+  // Subtle outer frame
+  drawRoundRect(ctx, 1, 1, width - 2, height - 2, 18);
+  ctx.strokeStyle = "#1F2937";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Top accent strip
+  ctx.fillStyle = theme.primary;
+  ctx.fillRect(0, 0, width, 5);
+
+  // Header: Tier pill & date
+  drawRoundRect(ctx, padX, 24, 176, 30, 8);
+  ctx.fillStyle = theme.soft;
+  ctx.fill();
+  ctx.strokeStyle = theme.primary;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = theme.text;
+  ctx.font = "700 13px Inter, system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.fillText(payload.title, padX + 12, 39);
+
+  ctx.fillStyle = "#94A3B8";
+  ctx.font = "500 12px Inter, system-ui, sans-serif";
+  ctx.fillText(payload.couponDate, padX, 74);
+
+  // Header right: Total odd
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#94A3B8";
+  ctx.font = "600 11px Inter, system-ui, sans-serif";
+  ctx.fillText("TOPLAM ORAN", width - padX, 34);
+
+  ctx.fillStyle = "#FFFFFF";
+  ctx.font = "800 30px 'JetBrains Mono', monospace";
+  ctx.fillText(payload.totalOdd.toFixed(2), width - padX, 68);
+  ctx.textAlign = "left";
+
+  // Preload CORS-safe logos in parallel (falls back silently to vector shield)
+  const bitmaps = await Promise.all(
+    payload.items.map(async (it) => ({
+      home: await loadCorsSafeBitmap(it.home_logo_url),
+      away: await loadCorsSafeBitmap(it.away_logo_url),
+    }))
+  );
+
+  // Match rows
+  let curY = headerH;
+  payload.items.forEach((it, idx) => {
+    drawRoundRect(ctx, padX, curY, width - padX * 2, rowH, 12);
+    ctx.fillStyle = "#131926";
+    ctx.fill();
+    ctx.strokeStyle = "#1F2937";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // League & time
+    ctx.fillStyle = "#94A3B8";
+    ctx.font = "500 11px Inter, system-ui, sans-serif";
+    ctx.textAlign = "left";
+    const leagueText = (it.league || "Maç").slice(0, 42);
+    ctx.fillText(leagueText, padX + 14, curY + 18);
+
+    if (it.start_time_tr) {
+      ctx.textAlign = "right";
+      ctx.fillStyle = "#94A3B8";
+      ctx.font = "600 11px 'JetBrains Mono', monospace";
+      ctx.fillText(it.start_time_tr, width - padX - 14, curY + 18);
+      ctx.textAlign = "left";
+    }
+
+    // Shields + Team names
+    const bm = bitmaps[idx];
+    drawTeamShield(ctx, padX + 14, curY + 30, 26, it.home_team, bm.home, theme.text);
+    drawTeamShield(ctx, padX + 44, curY + 30, 26, it.away_team, bm.away, "#22D3EE");
+
+    ctx.fillStyle = "#F1F5F9";
+    ctx.font = "700 13px Inter, system-ui, sans-serif";
+    const matchLabel = `${it.home_team} - ${it.away_team}`;
+    const trimmedMatch = matchLabel.length > 42 ? matchLabel.slice(0, 41) + "…" : matchLabel;
+    ctx.fillText(trimmedMatch, padX + 78, curY + 43);
+
+    // Pick + Odd + Confidence (no % on confidence!)
+    const pickStr = formatMarketLabel(it.market_key, it.selection_key);
+    ctx.fillStyle = theme.text;
+    ctx.font = "700 13px Inter, system-ui, sans-serif";
+    ctx.fillText(pickStr, padX + 14, curY + 72);
+
+    ctx.textAlign = "right";
+    if (it.confidence_score != null) {
+      ctx.fillStyle = "#94A3B8";
+      ctx.font = "600 11px 'JetBrains Mono', monospace";
+      ctx.fillText(`Güven ${Math.round(it.confidence_score)} Puan`, width - padX - 72, curY + 72);
+    }
+    ctx.fillStyle = "#FFFFFF";
+    ctx.font = "800 14px 'JetBrains Mono', monospace";
+    ctx.fillText(it.iddaa_odd.toFixed(2), width - padX - 14, curY + 72);
+    ctx.textAlign = "left";
+
+    curY += rowH + rowGap;
+  });
+
+  // Footer divider
+  const footY = height - footerH + 8;
+  ctx.strokeStyle = "#1F2937";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padX, footY);
+  ctx.lineTo(width - padX, footY);
+  ctx.stroke();
+
+  // Bottom-left: Fikstra icon + "Fikstra" signature
+  drawFikstraLogo(ctx, padX, footY + 14, 28);
+  ctx.fillStyle = "#F8FAFC";
+  ctx.font = "800 15px Inter, system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Fikstra", padX + 36, footY + 28);
+
+  // Bottom-right: Avg confidence out of 100
+  if (payload.avgConfidence != null) {
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#94A3B8";
+    ctx.font = "600 12px 'JetBrains Mono', monospace";
+    ctx.fillText(`Ort. Güven: ${payload.avgConfidence.toFixed(1)} / 100`, width - padX, footY + 28);
+    ctx.textAlign = "left";
+  }
+
+  const dataUrl = canvas.toDataURL("image/png");
+  const blob: Blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("PNG export failed"))), "image/png");
+  });
+  const slug = payload.tier.toLowerCase();
+  const filename = `fikstra-${slug}-${payload.couponDate}.png`;
+  return { dataUrl, blob, filename };
+}

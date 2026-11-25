@@ -1,0 +1,698 @@
+import { useEffect, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  AlertTriangle,
+  RefreshCw,
+  Sparkles,
+  TrendingDown,
+  X,
+} from "lucide-react";
+import {
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { api } from "../api/client";
+import type { MatchDetail } from "../types";
+import { formatMarketLabel } from "../utils/format";
+import { ConfidenceRing } from "./ConfidenceRing";
+import { FormStrip, LeagueBadge, TeamBadge } from "./TeamBadge";
+
+const INJURY_TR_MAP: [string, string][] = [
+  ["cruciate ligament tear", "Çapraz Bağ Yırtığı"],
+  ["cruciate ligament", "Çapraz Bağ Sakatlığı"],
+  ["syndesmotic ligament tear", "Sindesmoz Bağ Yırtığı"],
+  ["ligament tear", "Bağ Yırtığı"],
+  ["torn muscle fiber", "Kas Lifi Yırtığı"],
+  ["torn muscle", "Kas Yırtığı"],
+  ["partial muscle tear", "Kısmi Kas Yırtığı"],
+  ["muscle tear", "Kas Yırtığı"],
+  ["hamstring injury", "Arka Adale"],
+  ["hamstring", "Arka Adale"],
+  ["muscle injury", "Kas Sakatlığı"],
+  ["adductor", "Kasık / Adduktor"],
+  ["groin injury", "Kasık"],
+  ["groin", "Kasık"],
+  ["knee injury", "Diz"],
+  ["knee", "Diz"],
+  ["ankle injury", "Ayak Bileği"],
+  ["ankle", "Ayak Bileği"],
+  ["calf injury", "Baldır"],
+  ["calf", "Baldır"],
+  ["broken leg", "Bacak Kırığı"],
+  ["cartilage damage", "Kıkırdak Hasarı"],
+  ["concussion", "Beyin Sarsıntısı"],
+  ["fracture", "Kırık"],
+  ["hip", "Kalça"],
+  ["sprain", "Burkulma"],
+  ["strain", "Zorlanma"],
+  ["red card suspension", "Kırmızı Kart Cezalı"],
+  ["yellow card suspension", "Sarı Kart Cezalı"],
+  ["suspension", "Cezalı"],
+  ["unknown injury", "Sakatlık"],
+  ["illness", "Hastalık"],
+  ["fitness", "Kondisyon Eksikliği"],
+  ["shoulder", "Omuz"],
+  ["back injury", "Bel/Sırt"],
+  ["thigh", "Uyluk"],
+  ["foot", "Ayak"],
+  ["achilles", "Aşil Tendonu"],
+];
+
+function translateInjuryReason(raw?: string | null): string {
+  if (!raw) return "Sakatlık";
+  const low = raw.trim().toLowerCase();
+  for (const [en, tr] of INJURY_TR_MAP) {
+    if (low.includes(en)) return tr;
+  }
+  return raw;
+}
+
+interface CouponPickContext {
+  market_key: string;
+  selection_key: string;
+  iddaa_odd: number;
+}
+
+interface Props {
+  matchId: number | null;
+  couponPick?: CouponPickContext;
+  onClose: () => void;
+}
+
+export function MatchDetailDrawer({ matchId, couponPick, onClose }: Props) {
+  const [detail, setDetail] = useState<MatchDetail | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+
+  useEffect(() => {
+    if (!matchId) {
+      setDetail(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    api
+      .getMatchDetail(matchId, couponPick?.market_key, couponPick?.selection_key)
+      .then((d) => {
+        if (cancelled) return;
+        setDetail(d);
+        if (!d.context.ai_summary) {
+          setAiLoading(true);
+          api
+            .generateAiSummary(d.match_id, false)
+            .then((res) => {
+              if (!cancelled) {
+                setDetail((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        context: {
+                          ...prev.context,
+                          ai_summary: res.ai_summary,
+                          ai_source: res.ai_source,
+                        },
+                      }
+                    : prev
+                );
+              }
+            })
+            .catch(() => {})
+            .finally(() => {
+              if (!cancelled) setAiLoading(false);
+            });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [matchId, couponPick?.market_key, couponPick?.selection_key]);
+
+  const handleGenerateAi = async () => {
+    if (!detail) return;
+    setAiLoading(true);
+    try {
+      const res = await api.generateAiSummary(detail.match_id, false);
+      setDetail({
+        ...detail,
+        context: {
+          ...detail.context,
+          ai_summary: res.ai_summary,
+          ai_source: res.ai_source,
+        },
+      });
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const historyKeys = detail?.odds_history?.length
+    ? Object.keys(detail.odds_history[0]).filter((k) => k !== "time")
+    : [];
+
+  return (
+    <AnimatePresence>
+      {matchId !== null && (
+        <motion.div
+          className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/70 backdrop-blur-sm"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={onClose}
+        >
+          <motion.div
+            className="w-full md:max-w-2xl max-h-[90vh] overflow-y-auto rounded-t-3xl md:rounded-2xl bg-[#131926] border border-[#1F2937] shadow-2xl"
+            initial={{ y: 48, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 48, opacity: 0 }}
+            transition={{ type: "spring", damping: 28, stiffness: 300 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="sticky top-0 z-10 flex items-center justify-between px-5 py-4 bg-[#131926]/95 backdrop-blur border-b border-[#1F2937]">
+              <div className="min-w-0">
+                <p className="text-[11px] font-medium text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
+                  {detail && <LeagueBadge name={detail.league} logoUrl={detail.league_logo_url} />}
+                  <span className="truncate">
+                    {detail ? `${detail.league} • ${detail.start_date_tr} ${detail.start_time_tr}` : "Maç Detayı"}
+                  </span>
+                </p>
+                <h3 className="text-base font-bold text-slate-100 mt-0.5 truncate">
+                  {detail ? `${detail.home_team} vs ${detail.away_team}` : "Yükleniyor..."}
+                </h3>
+              </div>
+              <button
+                onClick={onClose}
+                className="p-2 rounded-xl bg-[#0B0F17] border border-[#1F2937] text-slate-400 hover:text-white"
+                aria-label="Kapat"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {loading || !detail ? (
+              <div className="p-8 text-center text-sm text-slate-400">Veriler yükleniyor...</div>
+            ) : (
+              <div className="p-5 space-y-5">
+                {couponPick && (
+                  <div className="p-3.5 rounded-2xl bg-emerald-500/12 border border-emerald-500/35 flex flex-col gap-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-extrabold text-emerald-300">
+                        Kupon Tercihi: {formatMarketLabel(couponPick.market_key, couponPick.selection_key)} @{" "}
+                        <span className="mono-nums text-white">{couponPick.iddaa_odd.toFixed(2)}</span>
+                      </span>
+                      <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">
+                        Kupon Ayağı
+                      </span>
+                    </div>
+                    {detail.top_prediction &&
+                      (detail.top_prediction.market_key !== couponPick.market_key ||
+                        detail.top_prediction.selection_key !== couponPick.selection_key) && (
+                        <p className="text-[11px] text-slate-300">
+                          Maçın #1 Tercihi:{" "}
+                          <span className="font-semibold text-cyan-300">
+                            {formatMarketLabel(
+                              detail.top_prediction.market_key,
+                              detail.top_prediction.selection_key
+                            )}{" "}
+                            @ {detail.top_prediction.iddaa_odd.toFixed(2)}
+                          </span>
+                        </p>
+                      )}
+                  </div>
+                )}
+
+                {/* Matchup Crests & Head-to-Head Comparison Bars */}
+                <div className="p-4 rounded-2xl bg-[#090D16] border border-[#1F2937] space-y-4">
+                  <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+                    <div className="flex flex-col items-center text-center gap-1.5 min-w-0">
+                      <TeamBadge name={detail.home_team} logoUrl={detail.home_logo_url} size="lg" />
+                      <span className="text-xs font-bold text-slate-100 truncate w-full">
+                        {detail.home_team}
+                      </span>
+                    </div>
+                    <span className="text-[11px] font-extrabold text-slate-500 px-2 py-1 rounded-lg bg-[#131926] border border-[#1F2937]">
+                      VS
+                    </span>
+                    <div className="flex flex-col items-center text-center gap-1.5 min-w-0">
+                      <TeamBadge name={detail.away_team} logoUrl={detail.away_logo_url} size="lg" />
+                      <span className="text-xs font-bold text-slate-100 truncate w-full">
+                        {detail.away_team}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Head-to-Head Bars: ClubElo, Dixon-Coles xG, League Rank */}
+                  {(detail.context.home_elo != null ||
+                    detail.top_prediction?.breakdown.xg_home != null ||
+                    detail.context.home_rank != null) && (
+                    <div className="space-y-2.5 pt-3 border-t border-[#1F2937]">
+                      {detail.context.home_elo != null && detail.context.away_elo != null && (() => {
+                        const h = detail.context.home_elo!;
+                        const a = detail.context.away_elo!;
+                        const hPct = Math.round((h / (h + a)) * 100);
+                        return (
+                          <div>
+                            <div className="flex justify-between text-[11px] mb-1 mono-nums">
+                              <span className="font-bold text-emerald-400">{Math.round(h)}</span>
+                              <span className="text-slate-400 font-medium">ClubElo Güç Puanı</span>
+                              <span className="font-bold text-cyan-400">{Math.round(a)}</span>
+                            </div>
+                            <div className="h-2 rounded-full bg-[#131926] overflow-hidden flex">
+                              <div className="bg-emerald-500 h-full" style={{ width: `${hPct}%` }} />
+                              <div className="bg-cyan-500 h-full flex-1" />
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {detail.top_prediction?.breakdown.xg_home != null &&
+                        detail.top_prediction?.breakdown.xg_away != null && (() => {
+                          const hx = detail.top_prediction!.breakdown.xg_home!;
+                          const ax = detail.top_prediction!.breakdown.xg_away!;
+                          const sum = hx + ax || 1;
+                          const hPct = Math.round((hx / sum) * 100);
+                          return (
+                            <div>
+                              <div className="flex justify-between text-[11px] mb-1 mono-nums">
+                                <span className="font-bold text-emerald-400">{hx.toFixed(2)}</span>
+                                <span className="text-slate-400 font-medium">Model Maç Beklentisi (Dixon-Coles xG)</span>
+                                <span className="font-bold text-cyan-400">{ax.toFixed(2)}</span>
+                              </div>
+                              <div className="h-2 rounded-full bg-[#131926] overflow-hidden flex">
+                                <div className="bg-emerald-500 h-full" style={{ width: `${hPct}%` }} />
+                                <div className="bg-cyan-500 h-full flex-1" />
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                      {detail.context.home_rank != null && detail.context.away_rank != null && (
+                        <div className="flex justify-between items-center text-[11px] mono-nums pt-0.5">
+                          <span className="px-2 py-0.5 rounded bg-[#131926] border border-[#1F2937] font-bold text-emerald-400">
+                            #{detail.context.home_rank}
+                          </span>
+                          <span className="text-slate-400 font-medium">Lig Sıralaması</span>
+                          <span className="px-2 py-0.5 rounded bg-[#131926] border border-[#1F2937] font-bold text-cyan-400">
+                            #{detail.context.away_rank}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Top Prediction & 4-part Breakdown */}
+                {detail.top_prediction && (
+                  <div className="p-4 rounded-2xl bg-[#0B0F17] border border-[#1F2937] space-y-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <span className="text-[11px] text-slate-400">Öne Çıkan Tercih</span>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-bold">
+                            {formatMarketLabel(
+                              detail.top_prediction.market_key,
+                              detail.top_prediction.selection_key
+                            )}
+                          </span>
+                          <span className="text-lg font-extrabold mono-nums text-white">
+                            {detail.top_prediction.iddaa_odd.toFixed(2)}
+                          </span>
+                          {detail.top_prediction.global_odd && (
+                            <span className="text-xs text-slate-400 mono-nums">
+                              Global {detail.top_prediction.global_odd.toFixed(2)}
+                            </span>
+                          )}
+                        </div>
+                        {(detail.top_prediction.breakdown.blended_prob_pct ||
+                          detail.top_prediction.breakdown.xg_home !== null) && (
+                          <p className="text-[11px] text-slate-400 mono-nums mt-1.5">
+                            Model Olasılığı: %{detail.top_prediction.breakdown.blended_prob_pct ?? detail.top_prediction.breakdown.true_prob_pct}
+                            {detail.top_prediction.breakdown.xg_home !== null &&
+                              detail.top_prediction.breakdown.xg_home !== undefined &&
+                              ` • Beklenen Gol (xG): Ev ${detail.top_prediction.breakdown.xg_home.toFixed(2)} - Dep ${detail.top_prediction.breakdown.xg_away?.toFixed(2) ?? "—"}`}
+                          </p>
+                        )}
+                        <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                          {detail.top_prediction.breakdown.kelly_units !== undefined && (
+                            <span className="px-2 py-0.5 rounded-md bg-slate-800 border border-[#1F2937] text-[10px] font-semibold text-slate-200 mono-nums">
+                              Önerilen Ağırlık: {detail.top_prediction.breakdown.kelly_units.toFixed(1)} / 5 Birim
+                            </span>
+                          )}
+                          {detail.top_prediction.breakdown.home_rest_days !== null &&
+                            detail.top_prediction.breakdown.home_rest_days !== undefined &&
+                            detail.top_prediction.breakdown.away_rest_days !== null &&
+                            detail.top_prediction.breakdown.away_rest_days !== undefined && (
+                              <span className="px-2 py-0.5 rounded-md bg-slate-800 border border-[#1F2937] text-[10px] font-medium text-slate-300 mono-nums">
+                                Dinlenme: Ev {detail.top_prediction.breakdown.home_rest_days}g • Dep{" "}
+                                {detail.top_prediction.breakdown.away_rest_days}g
+                              </span>
+                            )}
+                          {detail.top_prediction.breakdown.smart_money && (
+                            <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-bold text-emerald-400">
+                              Akıllı Para Teyidi
+                            </span>
+                          )}
+                          {detail.top_prediction.breakdown.trap_warning && (
+                            <span className="px-2 py-0.5 rounded-md bg-rose-500/15 border border-rose-500/30 text-[10px] font-bold text-rose-400">
+                              Tuzak Hareket
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <ConfidenceRing score={detail.top_prediction.confidence_score} size={56} />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 pt-2 border-t border-[#1F2937]">
+                      {[
+                        {
+                          label: "Global Değer",
+                          val: detail.top_prediction.breakdown.value,
+                          max: 35,
+                          color: "bg-emerald-500",
+                        },
+                        {
+                          label: "Oran Hareketi",
+                          val: detail.top_prediction.breakdown.odds_move,
+                          max: 25,
+                          color: "bg-cyan-500",
+                        },
+                        {
+                          label: "Form & Gol",
+                          val: detail.top_prediction.breakdown.form_goals,
+                          max: 25,
+                          color: "bg-amber-500",
+                        },
+                        {
+                          label: "Sakatlık Etkisi",
+                          val: detail.top_prediction.breakdown.injury,
+                          max: 15,
+                          color: "bg-indigo-500",
+                        },
+                      ].map((bar) => (
+                        <div key={bar.label}>
+                          <div className="flex justify-between text-[11px] mb-1">
+                            <span className="text-slate-400">{bar.label}</span>
+                            <span className="mono-nums text-slate-200 font-semibold">
+                              {bar.val}/{bar.max}
+                            </span>
+                          </div>
+                          <div className="h-1.5 rounded-full bg-[#1F2937] overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${bar.color}`}
+                              style={{ width: `${Math.min(100, (bar.val / bar.max) * 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Recent Shot Production (ESPN / Understat) — cleanly separated from Dixon-Coles */}
+                {(detail.context.home_true_xg != null || detail.odds.some((o) => o.global_source)) && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 rounded-2xl bg-[#090D16] border border-[#1F2937] text-[11px]">
+                    {detail.context.home_true_xg != null && detail.context.away_true_xg != null && (
+                      <div className="text-slate-200 mono-nums">
+                        <span className="text-slate-400 mr-1.5">
+                          {detail.context.xg_source === "espn_shots"
+                            ? "Son Maç Şut Üretimi (ESPN):"
+                            : "True xG (Understat):"}
+                        </span>
+                        <strong className="text-emerald-400">Ev {detail.context.home_true_xg.toFixed(2)}</strong>
+                        {detail.context.home_sot_pg != null && (
+                          <span className="text-slate-500"> ({detail.context.home_sot_pg.toFixed(1)} isabet)</span>
+                        )}{" "}
+                        • <strong className="text-cyan-400">Dep {detail.context.away_true_xg.toFixed(2)}</strong>
+                        {detail.context.away_sot_pg != null && (
+                          <span className="text-slate-500"> ({detail.context.away_sot_pg.toFixed(1)} isabet)</span>
+                        )}
+                      </div>
+                    )}
+                    {(() => {
+                      const src = detail.odds.find((o) => o.global_source)?.global_source;
+                      if (!src) return null;
+                      return (
+                        <span className="px-2 py-0.5 rounded-lg bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 font-semibold">
+                          {src === "pinnacle" ? "Pinnacle" : "Global Ort."}
+                        </span>
+                      );
+                    })()}
+                  </div>
+                )}
+
+                {/* Fikstra AI Analysis Card */}
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-cyan-500/10 via-[#0B0F17] to-emerald-500/10 border border-cyan-500/25">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-cyan-300">
+                      <Sparkles className="w-4 h-4" />
+                      <span>Maç Analiz Özeti</span>
+                      {detail.context.ai_source && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300">
+                          {detail.context.ai_source === "gemini"
+                            ? "Fikstra AI"
+                            : detail.context.ai_source === "transient_error"
+                              ? "Geçici Yoğunluk"
+                              : "Veri Özeti"}
+                        </span>
+                      )}
+                    </div>
+                    {!detail.context.ai_summary && (
+                      <button
+                        onClick={handleGenerateAi}
+                        disabled={aiLoading}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold disabled:opacity-50"
+                      >
+                        {aiLoading ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Sparkles className="w-3.5 h-3.5" />
+                        )}
+                        AI Özeti Getir
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-xs leading-relaxed text-slate-300">
+                    {detail.context.ai_summary ||
+                      "Bu maç için yapay zeka / veri özeti henüz üretilmedi. Tek dokunuşla üretebilirsiniz."}
+                  </p>
+                </div>
+
+                {/* Form & Goal Averages */}
+                <div className="p-4 rounded-2xl bg-[#0B0F17] border border-[#1F2937] space-y-3">
+                  <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                    Son 5 Maç Formu & Gol Ortalamaları
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {[
+                      {
+                        team: detail.home_team,
+                        logo: detail.home_logo_url,
+                        gf: detail.context.home_goals_avg,
+                        ga: detail.context.home_conceded_avg,
+                        form: detail.context.home_form,
+                      },
+                      {
+                        team: detail.away_team,
+                        logo: detail.away_logo_url,
+                        gf: detail.context.away_goals_avg,
+                        ga: detail.context.away_conceded_avg,
+                        form: detail.context.away_form,
+                      },
+                    ].map((side) => (
+                      <div key={side.team} className="p-3 rounded-xl bg-[#131926] border border-[#1F2937] space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <TeamBadge name={side.team} logoUrl={side.logo} />
+                            <p className="text-xs font-semibold text-slate-200 truncate">
+                              {side.team}
+                            </p>
+                          </div>
+                          <FormStrip form={side.form} />
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-slate-400 mono-nums pt-1 border-t border-[#1F2937]/70">
+                          <span>Atılan Gol Ort: <strong className="text-emerald-400">{side.gf ?? "—"}</strong></span>
+                          <span>Yenilen Gol Ort: <strong className="text-rose-400">{side.ga ?? "—"}</strong></span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Odds History Chart (Recharts) */}
+                {detail.odds_history.length > 0 && historyKeys.length > 0 && (
+                  <div className="p-4 rounded-2xl bg-[#0B0F17] border border-[#1F2937]">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <TrendingDown className="w-3.5 h-3.5 text-emerald-400" />
+                        Oran Değişim Grafiği (
+                        {formatMarketLabel(detail.odds_history_market, detail.odds_history_selection)})
+                      </h4>
+                    </div>
+                    <div className="h-44 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={detail.odds_history}>
+                          <XAxis dataKey="time" stroke="#64748B" fontSize={10} />
+                          <YAxis
+                            stroke="#64748B"
+                            fontSize={10}
+                            width={42}
+                            tickFormatter={(v) => Number(v).toFixed(2)}
+                            domain={[
+                              (dataMin: number) => Math.max(1.01, Number((dataMin - 0.05).toFixed(2))),
+                              (dataMax: number) => Number((dataMax + 0.05).toFixed(2)),
+                            ]}
+                          />
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: "#131926",
+                              borderColor: "#1F2937",
+                              borderRadius: "10px",
+                              fontSize: "12px",
+                            }}
+                          />
+                          {historyKeys.map((k, i) => (
+                            <Line
+                              key={k}
+                              type="monotone"
+                              dataKey={k}
+                              stroke={["#10B981", "#06B6D4", "#F59E0B"][i % 3]}
+                              strokeWidth={2}
+                              dot={{ r: 3 }}
+                            />
+                          ))}
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )}
+
+                {/* iddaa vs Global Odds Table — 3 Grouped Sections */}
+                <div className="p-4 rounded-2xl bg-[#090D16] border border-[#1F2937] space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                      iddaa.com vs Global Oranlar
+                    </h4>
+                    <span className="text-[10px] text-emerald-400">Yeşil çerçeve = Globalden avantajlı</span>
+                  </div>
+                  {[
+                    {
+                      title: "Maç Sonucu (1 - X - 2)",
+                      rows: [...detail.odds.filter((o) => o.market_key === "MS")].sort(
+                        (a, b) =>
+                          ({ "1": 1, X: 2, "2": 3 }[a.selection_key] ?? 9) -
+                          ({ "1": 1, X: 2, "2": 3 }[b.selection_key] ?? 9)
+                      ),
+                    },
+                    {
+                      title: "Gol Alt / Üst",
+                      rows: detail.odds.filter((o) => o.market_key.startsWith("AU_")),
+                    },
+                    {
+                      title: "KG & Çifte Şans",
+                      rows: detail.odds.filter((o) => o.market_key === "KG" || o.market_key === "CS"),
+                    },
+                  ]
+                    .filter((g) => g.rows.length > 0)
+                    .map((group) => (
+                      <div key={group.title} className="space-y-1.5">
+                        <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                          {group.title}
+                        </p>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          {group.rows.map((o, i) => {
+                            const hasEdge =
+                              o.global_avg_odd != null && o.iddaa_odd > o.global_avg_odd;
+                            return (
+                              <div
+                                key={i}
+                                className={`flex items-center justify-between px-3 py-2 rounded-xl bg-[#131926] border text-xs ${
+                                  hasEdge ? "border-emerald-500/50" : "border-[#1F2937]"
+                                }`}
+                              >
+                                <span className="text-slate-400 font-medium">
+                                  {formatMarketLabel(o.market_key, o.selection_key)}
+                                </span>
+                                <div className="text-right mono-nums">
+                                  <span className="font-bold text-slate-100">
+                                    {o.iddaa_odd.toFixed(2)}
+                                  </span>
+                                  {o.global_avg_odd && (
+                                    <span className="block text-[10px] text-cyan-400">
+                                      G: {o.global_avg_odd.toFixed(2)}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                </div>
+
+                {/* Injuries & Suspensions */}
+                <div className="p-4 rounded-2xl bg-[#0B0F17] border border-[#1F2937]">
+                  <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5 mb-3">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                    Sakat & Cezalı Oyuncular
+                  </h4>
+                  {detail.context.injuries.home.length === 0 &&
+                  detail.context.injuries.away.length === 0 ? (
+                    <p className="text-xs text-slate-500">
+                      Bu maç için kayıtlı sakat/cezalı verisi bulunamadı.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                      {[
+                        { team: detail.home_team, list: detail.context.injuries.home },
+                        { team: detail.away_team, list: detail.context.injuries.away },
+                      ].map((side) => (
+                        <div key={side.team} className="space-y-1.5">
+                          <p className="font-semibold text-slate-200">{side.team}</p>
+                          {side.list.length === 0 ? (
+                            <p className="text-slate-500 text-[11px]">Eksik bildirimi yok</p>
+                          ) : (
+                            side.list.slice(0, 6).map((inj, idx) => (
+                              <div
+                                key={idx}
+                                className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-[#131926] border border-[#1F2937]"
+                              >
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span className="text-slate-200 truncate">{inj.player}</span>
+                                  {inj.market_value && (
+                                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 text-[10px] font-semibold shrink-0 mono-nums">
+                                      {inj.market_value}
+                                    </span>
+                                  )}
+                                  {inj.missed_games != null && inj.missed_games <= 3 && (
+                                    <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[10px] font-semibold shrink-0">
+                                      Yeni Eksik
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-rose-400 text-[11px] shrink-0">
+                                  {translateInjuryReason(inj.reason)}
+                                </span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}

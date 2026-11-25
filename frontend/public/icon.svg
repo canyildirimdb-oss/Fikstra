@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="fikstraBg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0D1424" />
+      <stop offset="100%" stop-color="#090D16" />
+    </linearGradient>
+    <linearGradient id="fikstraAccent" x1="120" y1="96" x2="392" y2="416" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#34D399" />
+      <stop offset="55%" stop-color="#10B981" />
+      <stop offset="100%" stop-color="#06B6D4" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#fikstraBg)" />
+  <rect x="16" y="16" width="480" height="480" rx="100" stroke="url(#fikstraAccent)" stroke-opacity="0.24" stroke-width="6" />
+  <!-- Geometric F Emblem -->
+  <path d="M154 118H372L346 184H224V234H324L300 296H224V396H154V118Z" fill="url(#fikstraAccent)" />
+  <!-- Sharp Signal Pulse Accent -->
+  <circle cx="358" cy="356" r="24" fill="#06B6D4" />
+  <circle cx="358" cy="356" r="10" fill="#090D16" />
+</svg>
