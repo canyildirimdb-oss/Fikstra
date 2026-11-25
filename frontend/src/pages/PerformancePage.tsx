@@ -42,7 +42,7 @@ export function PerformancePage({ refreshTrigger }: Props) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setLoading(true);
+    if (data === null) setLoading(true);
     api
       .getPerformance()
       .then(setData)

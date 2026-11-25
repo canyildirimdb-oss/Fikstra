@@ -129,135 +129,159 @@ def cleanup_multi_market_settled_predictions(db: Session) -> int:
     return cleaned
 
 
+def _as_utc(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+def settle_coupons(db: Session) -> int:
+    """
+    Settle ALL PENDING coupons in the database (regardless of coupon_date)
+    whose legs have finished. Returns number of newly settled coupons.
+    """
+    pending_coupons = db.query(Coupon).filter(Coupon.status == "PENDING").all()
+    settled_coupons = 0
+    for coupon in pending_coupons:
+        statuses = [item.prediction.status for item in coupon.items if item.prediction]
+        if not statuses:
+            continue
+        if "LOST" in statuses:
+            coupon.status = "LOST"
+            settled_coupons += 1
+        elif "PENDING" in statuses:
+            continue
+        elif all(s == "VOID" for s in statuses):
+            coupon.status = "VOID"
+            coupon.total_odd = 1.0
+            settled_coupons += 1
+        elif all(s in ("WON", "VOID") for s in statuses):
+            coupon.status = "WON"
+            effective_odds = [
+                item.prediction.iddaa_odd
+                for item in coupon.items
+                if item.prediction and item.prediction.status != "VOID"
+            ]
+            coupon.total_odd = round(math.prod(effective_odds), 2) if effective_odds else 1.0
+            settled_coupons += 1
+    return settled_coupons
+
+
 def settle_finished_matches(db: Session, espn_events: Optional[list[dict]] = None) -> int:
     """
-    Settle matches whose kickoff was 130+ minutes ago using real 90-minute regular-time scores.
+    Settle matches whose kickoff was between 95 minutes and 48 hours ago (UTC) using real
+    90-minute regular-time scores, and void matches older than 48h/36h that never completed.
     Only the single official #1 pick (is_top_pick=True) per match is settled as WON/LOST for
     archive & performance stats (coupon-referenced secondary picks settle only for their coupon).
-    Postponed/canceled/abandoned/36h+ stale matches and unseparable AET/PEN matches are marked VOID.
     """
     cleanup_multi_market_settled_predictions(db)
     now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(minutes=130)
+    window_end = now - timedelta(minutes=95)
+    window_start = now - timedelta(hours=48)
     stale_void_cutoff = now - timedelta(hours=36)
+
     pending_matches = (
         db.query(Match)
-        .filter(Match.start_time_utc <= cutoff, Match.status.notin_(["FINISHED", "VOID"]))
+        .filter(Match.start_time_utc <= window_end, Match.status.notin_(["FINISHED", "VOID"]))
         .all()
     )
-    if not pending_matches:
-        return 0
-
-    if espn_events is None:
-        dates = sorted({m.start_time_utc.strftime("%Y%m%d") for m in pending_matches})
-        espn_events = fetch_espn_events_for_dates(dates)
 
     settled_count = 0
+    recent_matches: list[Match] = []
+    for m in pending_matches:
+        m_start = _as_utc(m.start_time_utc)
+        if m_start < window_start:
+            settled_count += _mark_match_void(db, m, now)
+        elif window_start <= m_start <= window_end:
+            recent_matches.append(m)
 
-    for match in pending_matches:
-        m_start = (
-            match.start_time_utc.replace(tzinfo=timezone.utc)
-            if match.start_time_utc.tzinfo is None
-            else match.start_time_utc
-        )
-        ext = find_best_external_match(
-            match.home_team,
-            match.away_team,
-            match.start_time_utc,
-            espn_events,
-        )
+    if recent_matches:
+        if espn_events is None:
+            date_set: set[str] = set()
+            for m in recent_matches:
+                ms = _as_utc(m.start_time_utc)
+                date_set.add(ms.strftime("%Y%m%d"))
+                date_set.add((ms - timedelta(hours=6)).strftime("%Y%m%d"))
+            espn_events = fetch_espn_events_for_dates(sorted(date_set))
 
-        if ext and ext.get("is_void_status"):
-            settled_count += _mark_match_void(db, match, now)
-            continue
+        for match in recent_matches:
+            m_start = _as_utc(match.start_time_utc)
+            ext = find_best_external_match(
+                match.home_team,
+                match.away_team,
+                m_start,
+                espn_events,
+            )
 
-        if not ext or not ext.get("completed"):
-            if m_start <= stale_void_cutoff:
-                settled_count += _mark_match_void(db, match, now)
-            continue
-
-        if ext.get("is_aet_or_pen"):
-            hs = ext.get("reg_home_score")
-            as_ = ext.get("reg_away_score")
-            if hs is None or as_ is None:
+            if ext and ext.get("is_void_status"):
                 settled_count += _mark_match_void(db, match, now)
                 continue
-        else:
-            hs = ext.get("home_score")
-            as_ = ext.get("away_score")
-            if hs is None or as_ is None:
+
+            if not ext or not ext.get("completed"):
                 if m_start <= stale_void_cutoff:
                     settled_count += _mark_match_void(db, match, now)
                 continue
 
-        match.status = "FINISHED"
-        match.home_score = hs
-        match.away_score = as_
-        settled_count += 1
-
-        preds = (
-            db.query(Prediction)
-            .filter(Prediction.match_id == match.id, Prediction.status == "PENDING")
-            .all()
-        )
-        if preds:
-            flagged = [p for p in preds if p.is_top_pick]
-            if flagged:
-                official = flagged[0]
+            if ext.get("is_aet_or_pen"):
+                hs = ext.get("reg_home_score")
+                as_ = ext.get("reg_away_score")
+                if hs is None or as_ is None:
+                    settled_count += _mark_match_void(db, match, now)
+                    continue
             else:
-                eligible = [p for p in preds if p.iddaa_odd < 4.0] or preds
-                official = max(
-                    eligible,
-                    key=lambda p: (
-                        p.confidence_score,
-                        p.value_edge_pct if p.value_edge_pct is not None else -99.0,
-                        p.iddaa_odd,
-                    ),
-                )
-            pred_ids = [p.id for p in preds]
-            coupon_pred_ids = {
-                row[0]
-                for row in db.query(CouponItem.prediction_id)
-                .filter(CouponItem.prediction_id.in_(pred_ids))
+                hs = ext.get("home_score")
+                as_ = ext.get("away_score")
+                if hs is None or as_ is None:
+                    if m_start <= stale_void_cutoff:
+                        settled_count += _mark_match_void(db, match, now)
+                    continue
+
+            match.status = "FINISHED"
+            match.home_score = hs
+            match.away_score = as_
+            settled_count += 1
+
+            preds = (
+                db.query(Prediction)
+                .filter(Prediction.match_id == match.id, Prediction.status == "PENDING")
                 .all()
-            }
-            for p in preds:
-                if p.id == official.id:
-                    p.is_top_pick = True
-                    p.status = evaluate_prediction_outcome(p.market_key, p.selection_key, hs, as_)
-                    p.settled_at = now
-                elif p.id in coupon_pred_ids:
-                    p.is_top_pick = False
-                    p.status = evaluate_prediction_outcome(p.market_key, p.selection_key, hs, as_)
-                    p.settled_at = now
+            )
+            if preds:
+                flagged = [p for p in preds if p.is_top_pick]
+                if flagged:
+                    official = flagged[0]
                 else:
-                    p.is_top_pick = False
-                    p.status = "VOID"
-                    p.settled_at = now
+                    eligible = [p for p in preds if p.iddaa_odd < 4.0] or preds
+                    official = max(
+                        eligible,
+                        key=lambda p: (
+                            p.confidence_score,
+                            p.value_edge_pct if p.value_edge_pct is not None else -99.0,
+                            p.iddaa_odd,
+                        ),
+                    )
+                pred_ids = [p.id for p in preds]
+                coupon_pred_ids = {
+                    row[0]
+                    for row in db.query(CouponItem.prediction_id)
+                    .filter(CouponItem.prediction_id.in_(pred_ids))
+                    .all()
+                }
+                for p in preds:
+                    if p.id == official.id:
+                        p.is_top_pick = True
+                        p.status = evaluate_prediction_outcome(p.market_key, p.selection_key, hs, as_)
+                        p.settled_at = now
+                    elif p.id in coupon_pred_ids:
+                        p.is_top_pick = False
+                        p.status = evaluate_prediction_outcome(p.market_key, p.selection_key, hs, as_)
+                        p.settled_at = now
+                    else:
+                        p.is_top_pick = False
+                        p.status = "VOID"
+                        p.settled_at = now
 
     if settled_count:
         db.flush()
-        # Update pending coupons whose items are all settled
-        pending_coupons = db.query(Coupon).filter(Coupon.status == "PENDING").all()
-        for coupon in pending_coupons:
-            statuses = [item.prediction.status for item in coupon.items]
-            if not statuses:
-                continue
-            if "LOST" in statuses:
-                coupon.status = "LOST"
-            elif "PENDING" in statuses:
-                continue
-            elif all(s == "VOID" for s in statuses):
-                coupon.status = "VOID"
-                coupon.total_odd = 1.0
-            elif all(s in ("WON", "VOID") for s in statuses):
-                coupon.status = "WON"
-                effective_odds = [
-                    item.prediction.iddaa_odd
-                    for item in coupon.items
-                    if item.prediction.status != "VOID"
-                ]
-                coupon.total_odd = round(math.prod(effective_odds), 2) if effective_odds else 1.0
 
+    settle_coupons(db)
     db.commit()
     return settled_count

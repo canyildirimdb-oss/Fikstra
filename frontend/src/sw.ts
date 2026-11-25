@@ -1,11 +1,12 @@
 /// <reference lib="webworker" />
 import { clientsClaim } from "workbox-core";
-import { precacheAndRoute } from "workbox-precaching";
+import { cleanupOutdatedCaches, precacheAndRoute } from "workbox-precaching";
 
 declare let self: ServiceWorkerGlobalScope;
 
 self.skipWaiting();
 clientsClaim();
+cleanupOutdatedCaches();
 precacheAndRoute(self.__WB_MANIFEST || []);
 
 self.addEventListener("push", (event) => {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Check, Flame, Plus, Search, Zap } from "lucide-react";
 import { api } from "../api/client";
@@ -26,10 +26,15 @@ export function HighlightsPage({
   const [search, setSearch] = useState("");
   const [items, setItems] = useState<PredictionItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const lastFilterRef = useRef<string>("");
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    const filterKey = `${todayOnly}|${search}`;
+    if (lastFilterRef.current !== filterKey) {
+      setLoading(true);
+      lastFilterRef.current = filterKey;
+    }
     api
       .getPredictions({
         todayOnly,
@@ -144,7 +149,7 @@ export function HighlightsPage({
                 : "glass-card text-slate-300 hover:text-white"
             }`}
           >
-            Tüm Bülten
+            Tümü
           </button>
         </div>
 
@@ -173,7 +178,7 @@ export function HighlightsPage({
             Seçili filtrelere uygun maç bulunamadı
           </p>
           <p className="text-xs text-slate-400 mt-1">
-            "Tüm Bülten" sekmesini veya farklı bir arama terimini deneyebilirsiniz.
+            "Tümü" sekmesini veya farklı bir arama terimini deneyebilirsiniz.
           </p>
         </div>
       ) : (

@@ -1,12 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   BarChart3,
   Bell,
   BellRing,
   Flame,
   Layers,
-  ListFilter,
-  RefreshCw,
   Share2,
   Ticket,
 } from "lucide-react";
@@ -15,18 +13,16 @@ import { formatMarketLabel } from "./utils/format";
 import { CouponShareModal } from "./components/CouponShareModal";
 import { MatchDetailDrawer } from "./components/MatchDetailDrawer";
 import type { ShareCouponPayload } from "./utils/couponShare";
-import { BulletinPage } from "./pages/BulletinPage";
 import { CouponsPage } from "./pages/CouponsPage";
 import { HighlightsPage } from "./pages/HighlightsPage";
 import { PerformancePage } from "./pages/PerformancePage";
 import type { CustomSlipItem, DashboardSummary } from "./types";
 
-type TabKey = "highlights" | "coupons" | "bulletin" | "performance";
+type TabKey = "highlights" | "coupons" | "performance";
 
 const TABS: { key: TabKey; label: string; icon: typeof Flame }[] = [
   { key: "highlights", label: "Öne Çıkanlar", icon: Flame },
   { key: "coupons", label: "Kuponlar", icon: Layers },
-  { key: "bulletin", label: "Bülten", icon: ListFilter },
   { key: "performance", label: "Performans", icon: BarChart3 },
 ];
 
@@ -52,8 +48,51 @@ export function App() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [pushStatus, setPushStatus] = useState<"idle" | "enabled" | "unsupported">("idle");
   const [pushMsg, setPushMsg] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
   const [slipSharePayload, setSlipSharePayload] = useState<ShareCouponPayload | null>(null);
+  const lastAutoRefreshRef = useRef<number>(Date.now());
+
+  // Redirect legacy /bulten or /bulletin route to home (Öne Çıkanlar)
+  useEffect(() => {
+    const path = window.location.pathname.toLowerCase();
+    if (path === "/bulten" || path === "/bulletin") {
+      window.history.replaceState(null, "", "/");
+      setTab("highlights");
+    }
+  }, []);
+
+  // Silent auto-refresh every 60s when tab is visible, and immediately on visibility/focus return
+  useEffect(() => {
+    const triggerSilentRefresh = () => {
+      const now = Date.now();
+      if (now - lastAutoRefreshRef.current < 5000) return;
+      lastAutoRefreshRef.current = now;
+      setRefreshTrigger((n) => n + 1);
+    };
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        lastAutoRefreshRef.current = Date.now();
+        setRefreshTrigger((n) => n + 1);
+      }
+    }, 60_000);
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        triggerSilentRefresh();
+      }
+    };
+    const onFocus = () => {
+      triggerSilentRefresh();
+    };
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
 
   const loadSummary = useCallback(() => {
     api.getSummary().then(setSummary).catch(() => {});
@@ -62,28 +101,6 @@ export function App() {
   useEffect(() => {
     loadSummary();
   }, [loadSummary, refreshTrigger]);
-
-  const handleManualRefresh = async () => {
-    setRefreshTrigger((n) => n + 1);
-    if (refreshing) return;
-    setRefreshing(true);
-    try {
-      const res = await api.triggerRefresh();
-      if (res.status === "cooldown") {
-        setPushMsg(`Veriler güncel • ${res.retry_after_sec ?? 180} sn sonra yeniden taranabilir.`);
-      } else if (res.status === "already_running") {
-        setPushMsg("Arka planda tarama zaten sürüyor, ekran güncellendi.");
-      } else {
-        setPushMsg("Canlı bülten taraması arka planda başlatıldı.");
-        setTimeout(() => setRefreshTrigger((n) => n + 1), 6000);
-      }
-    } catch {
-      setPushMsg("Veriler yenilendi.");
-    } finally {
-      setRefreshing(false);
-      setTimeout(() => setPushMsg(null), 3500);
-    }
-  };
 
   const handleToggleSlip = (item: CustomSlipItem) => {
     setSlipItems((prev) => {
@@ -189,7 +206,7 @@ export function App() {
             })}
           </nav>
 
-          {/* Circular Dark Glass Actions */}
+          {/* Circular Dark Glass Notification Action */}
           <div className="flex items-center gap-2">
             <button
               onClick={handleEnablePush}
@@ -208,14 +225,6 @@ export function App() {
               {pushStatus === "enabled" && (
                 <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[#00FF85] shadow-[0_0_6px_#00FF85]" />
               )}
-            </button>
-            <button
-              onClick={handleManualRefresh}
-              disabled={refreshing}
-              className="w-9 h-9 rounded-full glass-card flex items-center justify-center text-slate-300 hover:text-[#00FF85] hover:border-[#00FF85]/40 disabled:opacity-60 transition-all"
-              title="Yenile"
-            >
-              <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin text-[#00FF85]" : ""}`} />
             </button>
           </div>
         </div>
@@ -248,12 +257,6 @@ export function App() {
             }
             onClearSlip={() => setSlipItems([])}
             onSelectMatch={(matchId, couponPick) => setSelectedMatch({ matchId, couponPick })}
-            refreshTrigger={refreshTrigger}
-          />
-        )}
-        {tab === "bulletin" && (
-          <BulletinPage
-            onSelectMatch={(id) => setSelectedMatch({ matchId: id })}
             refreshTrigger={refreshTrigger}
           />
         )}
@@ -322,9 +325,9 @@ export function App() {
         </div>
       )}
 
-      {/* Mobile Floating Bottom Navigation Dock with Elevated Center Kuponum Fişi Button */}
+      {/* Mobile Floating Symmetric 4-Tab Bottom Navigation Dock */}
       <nav className="md:hidden fixed bottom-3 inset-x-3 z-40">
-        <div className="relative rounded-2xl bg-[#080E18]/90 backdrop-blur-2xl border border-emerald-500/20 shadow-[0_12px_35px_-10px_rgba(0,0,0,0.85)] px-2 py-1.5 grid grid-cols-5 items-center">
+        <div className="relative rounded-2xl bg-[#080E18]/90 backdrop-blur-2xl border border-emerald-500/20 shadow-[0_12px_35px_-10px_rgba(0,0,0,0.85)] px-2 py-1.5 grid grid-cols-4 items-center">
           {(["highlights", "coupons"] as TabKey[]).map((key) => {
             const t = TABS.find((x) => x.key === key)!;
             const Icon = t.icon;
@@ -346,27 +349,26 @@ export function App() {
             );
           })}
 
-          {/* Elevated Center Neon Green Kuponum Fişi Button */}
-          <div className="flex justify-center">
-            <button
-              onClick={() => {
-                setTab("coupons");
-                window.scrollTo({ top: 0, behavior: "smooth" });
-              }}
-              className="relative -mt-6 w-13 h-13 rounded-full bg-[#00FF85] text-[#05080D] flex items-center justify-center shadow-[0_0_24px_rgba(0,255,133,0.6)] border-4 border-[#05080D] active:scale-95 transition-transform"
-              title="Kuponum Fişi"
-            >
-              <Ticket className="w-5 h-5 stroke-[2.4]" />
-              {slipItems.length > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1 rounded-full bg-[#05080D] border border-[#00FF85] text-[#00FF85] text-[10px] font-extrabold mono-nums flex items-center justify-center shadow">
-                  {slipItems.length}
-                </span>
-              )}
-            </button>
-          </div>
+          {/* Neon Green Highlighted Kuponum Button with Badge */}
+          <button
+            onClick={() => {
+              setTab("coupons");
+              window.scrollTo({ top: 0, behavior: "smooth" });
+            }}
+            className="relative flex flex-col items-center justify-center py-1.5 rounded-xl bg-[#00FF85]/15 border border-[#00FF85]/45 text-[#00FF85] shadow-[0_0_16px_-4px_rgba(0,255,133,0.45)] active:scale-95 transition-transform mx-1"
+            title="Kuponum"
+          >
+            <Ticket className="w-4 h-4 stroke-[2.3]" />
+            <span className="text-[10px] font-bold mt-0.5 truncate">Kuponum</span>
+            {slipItems.length > 0 && (
+              <span className="absolute -top-1.5 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#00FF85] text-[#05080D] text-[10px] font-extrabold mono-nums flex items-center justify-center shadow">
+                {slipItems.length}
+              </span>
+            )}
+          </button>
 
-          {(["bulletin", "performance"] as TabKey[]).map((key) => {
-            const t = TABS.find((x) => x.key === key)!;
+          {(() => {
+            const t = TABS.find((x) => x.key === "performance")!;
             const Icon = t.icon;
             const active = tab === t.key;
             return (
@@ -384,7 +386,7 @@ export function App() {
                 )}
               </button>
             );
-          })}
+          })()}
         </div>
       </nav>
 

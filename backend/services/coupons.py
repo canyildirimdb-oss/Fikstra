@@ -190,7 +190,28 @@ def generate_daily_coupons(db: Session) -> list[Coupon]:
     frozen_tiers: set[str] = set()
     global_used_matches: set[int] = set()
 
+    # Midnight carry-over lock: if the latest locked/started coupon for a tier is still PENDING
+    # (from yesterday or earlier), keep it active and do NOT overwrite or generate a new one today.
+    for tier_name in ("BANKO", "DENGELI", "SURPRIZ"):
+        pending_carry = (
+            db.query(Coupon)
+            .filter(Coupon.tier == tier_name, Coupon.status == "PENDING")
+            .order_by(Coupon.coupon_date.desc(), Coupon.id.desc())
+            .first()
+        )
+        if pending_carry and (
+            pending_carry.is_locked or _should_freeze_coupon(pending_carry, now_utc)
+        ):
+            pending_carry.is_locked = True
+            existing_by_tier[tier_name] = pending_carry
+            frozen_tiers.add(tier_name)
+            for item in pending_carry.items:
+                if item.prediction:
+                    global_used_matches.add(item.prediction.match_id)
+
     for tier, c in existing_by_tier.items():
+        if tier in frozen_tiers:
+            continue
         if _should_freeze_coupon(c, now_utc):
             c.is_locked = True
             frozen_tiers.add(tier)

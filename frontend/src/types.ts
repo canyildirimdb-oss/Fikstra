@@ -176,6 +176,7 @@ export interface CouponItemData {
   home_logo_url?: string | null;
   away_logo_url?: string | null;
   league_logo_url?: string | null;
+  start_date_tr?: string;
   start_time_tr: string;
   market_key: string;
   selection_key: string;

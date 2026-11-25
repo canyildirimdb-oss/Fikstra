@@ -2,6 +2,7 @@ import { formatMarketLabel } from "./format";
 
 export interface ShareCouponLeg {
   league?: string;
+  start_date_tr?: string;
   start_time_tr?: string;
   home_team: string;
   away_team: string;
@@ -11,6 +12,9 @@ export interface ShareCouponLeg {
   selection_key: string;
   iddaa_odd: number;
   confidence_score?: number;
+  home_score?: number | null;
+  away_score?: number | null;
+  leg_result?: string;
 }
 
 export interface ShareCouponPayload {
@@ -19,6 +23,7 @@ export interface ShareCouponPayload {
   couponDate: string;
   totalOdd: number;
   avgConfidence?: number | null;
+  couponStatus?: string;
   items: ShareCouponLeg[];
   textPayload: string;
 }
@@ -193,6 +198,24 @@ export async function generateCouponSharePng(
   ctx.textBaseline = "middle";
   ctx.fillText(payload.title, padX + 12, 39);
 
+  if (payload.couponStatus === "WON" || payload.couponStatus === "LOST") {
+    const isWon = payload.couponStatus === "WON";
+    const stampColor = isWon ? "#00FF85" : "#FB7185";
+    const stampSoft = isWon ? "rgba(0, 255, 133, 0.16)" : "rgba(244, 63, 94, 0.18)";
+    drawRoundRect(ctx, padX + 186, 24, 96, 30, 8);
+    ctx.fillStyle = stampSoft;
+    ctx.fill();
+    ctx.strokeStyle = stampColor;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+
+    ctx.fillStyle = stampColor;
+    ctx.font = "800 12px Inter, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(isWon ? "KAZANDI" : "KAYBETTİ", padX + 186 + 48, 39);
+    ctx.textAlign = "left";
+  }
+
   ctx.fillStyle = "#94A3B8";
   ctx.font = "500 12px Inter, system-ui, sans-serif";
   ctx.fillText(payload.couponDate, padX, 74);
@@ -226,22 +249,26 @@ export async function generateCouponSharePng(
     ctx.lineWidth = 1;
     ctx.stroke();
 
-    // League & time
+    // League & date+time (GG.AA SS:DD)
     ctx.fillStyle = "#94A3B8";
     ctx.font = "500 11px Inter, system-ui, sans-serif";
     ctx.textAlign = "left";
-    const leagueText = (it.league || "Maç").slice(0, 42);
+    const leagueText = (it.league || "Maç").slice(0, 36);
     ctx.fillText(leagueText, padX + 14, curY + 18);
 
-    if (it.start_time_tr) {
+    const timeLabel = it.start_date_tr
+      ? `${it.start_date_tr} ${it.start_time_tr || ""}`.trim()
+      : it.start_time_tr || "";
+    if (timeLabel) {
       ctx.textAlign = "right";
       ctx.fillStyle = "#94A3B8";
       ctx.font = "600 11px 'JetBrains Mono', monospace";
-      ctx.fillText(it.start_time_tr, width - padX - 14, curY + 18);
+      ctx.fillText(timeLabel, width - padX - 14, curY + 18);
       ctx.textAlign = "left";
     }
 
-    // Shields + Team names
+    // Shields + Team names (+ optional final score on right)
+    const hasScore = it.home_score != null && it.away_score != null;
     const bm = bitmaps[idx];
     drawTeamShield(ctx, padX + 14, curY + 30, 26, it.home_team, bm.home, theme.text);
     drawTeamShield(ctx, padX + 44, curY + 30, 26, it.away_team, bm.away, "#22D3EE");
@@ -249,17 +276,31 @@ export async function generateCouponSharePng(
     ctx.fillStyle = "#F1F5F9";
     ctx.font = "700 13px Inter, system-ui, sans-serif";
     const matchLabel = `${it.home_team} - ${it.away_team}`;
-    const trimmedMatch = matchLabel.length > 42 ? matchLabel.slice(0, 41) + "…" : matchLabel;
+    const maxLen = hasScore ? 34 : 42;
+    const trimmedMatch = matchLabel.length > maxLen ? matchLabel.slice(0, maxLen - 1) + "…" : matchLabel;
     ctx.fillText(trimmedMatch, padX + 78, curY + 43);
 
-    // Pick + Odd + Confidence (no % on confidence!)
+    if (hasScore) {
+      ctx.textAlign = "right";
+      ctx.fillStyle = "#E2E8F0";
+      ctx.font = "800 13px 'JetBrains Mono', monospace";
+      ctx.fillText(`${it.home_score} - ${it.away_score}`, width - padX - 14, curY + 43);
+      ctx.textAlign = "left";
+    }
+
+    // Pick + Odd + Result/Confidence
     const pickStr = formatMarketLabel(it.market_key, it.selection_key);
     ctx.fillStyle = theme.text;
     ctx.font = "700 13px Inter, system-ui, sans-serif";
     ctx.fillText(pickStr, padX + 14, curY + 72);
 
     ctx.textAlign = "right";
-    if (it.confidence_score != null) {
+    if (it.leg_result === "WON" || it.leg_result === "LOST") {
+      const legWon = it.leg_result === "WON";
+      ctx.fillStyle = legWon ? "#00FF85" : "#FB7185";
+      ctx.font = "800 11px Inter, system-ui, sans-serif";
+      ctx.fillText(legWon ? "KAZANDI" : "KAYBETTİ", width - padX - 66, curY + 72);
+    } else if (it.confidence_score != null) {
       ctx.fillStyle = "#94A3B8";
       ctx.font = "600 11px 'JetBrains Mono', monospace";
       ctx.fillText(`Güven ${Math.round(it.confidence_score)} Puan`, width - padX - 72, curY + 72);

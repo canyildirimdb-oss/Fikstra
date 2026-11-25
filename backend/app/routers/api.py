@@ -26,7 +26,7 @@ from scrapers.iddaa import is_youth_or_women_match
 from services.ai_summary import generate_match_summary
 from services.analyzer import MAX_HIGHLIGHT_ODD, MIN_ODD_RULE
 from services.sync import is_sync_running, run_sync_pipeline
-from utils.time_utils import is_tr_today_or_next_24h, to_tr_datetime, tr_today_str
+from utils.time_utils import is_tr_today_or_next_24h, to_tr_datetime, tr_now, tr_today_str
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -292,9 +292,13 @@ def get_predictions(
     search_low = (search or "").strip().lower()
     seen_matches: set[int] = set()
     selected_preds: list[Prediction] = []
+    now_utc = datetime.now(timezone.utc)
 
     for p in preds:
         m = p.match
+        m_start = m.start_time_utc.replace(tzinfo=timezone.utc) if m.start_time_utc.tzinfo is None else m.start_time_utc
+        if m_start <= now_utc:
+            continue
         if today_only and not is_tr_today_or_next_24h(m.start_time_utc):
             continue
         if search_low and (
@@ -354,97 +358,6 @@ def get_predictions(
         })
 
     return _cache_set(cache_key, {"count": len(items), "items": items})
-
-
-@router.get("/matches")
-@router.get("/bulletin")
-def get_matches_bulletin(
-    today_only: bool = Query(default=False),
-    major_only: bool = Query(default=False),
-    min_odd: float = Query(default=1.01, ge=1.0),
-    market: str = Query(default="MS"),
-    search: Optional[str] = Query(default=None),
-    db: Session = Depends(get_db),
-):
-    cache_key = f"bulletin:{today_only}:{major_only}:{min_odd}:{market}:{(search or '').strip().lower()}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
-
-    q = db.query(Match).filter(Match.status.in_(["SCHEDULED", "LIVE"]))
-    if major_only:
-        q = q.filter(Match.is_major_league.is_(True))
-    matches = q.order_by(Match.is_major_league.desc(), Match.start_time_utc.asc()).all()
-
-    search_low = (search or "").strip().lower()
-    filtered_matches: list[Match] = []
-    for m in matches:
-        if today_only and not is_tr_today_or_next_24h(m.start_time_utc):
-            continue
-        if search_low and (
-            search_low not in m.home_team.lower()
-            and search_low not in m.away_team.lower()
-            and search_low not in m.league.lower()
-        ):
-            continue
-        filtered_matches.append(m)
-
-    match_ids = [m.id for m in filtered_matches]
-    odds_by_match: dict[int, list[OddsCurrent]] = defaultdict(list)
-    top_conf_by_match: dict[int, float] = {}
-    if match_ids:
-        for o in (
-            db.query(OddsCurrent)
-            .filter(OddsCurrent.match_id.in_(match_ids), OddsCurrent.market_key == market)
-            .all()
-        ):
-            odds_by_match[o.match_id].append(o)
-
-        for p in (
-            db.query(Prediction.match_id, Prediction.confidence_score)
-            .filter(Prediction.match_id.in_(match_ids), Prediction.status == "PENDING")
-            .all()
-        ):
-            prev = top_conf_by_match.get(p.match_id)
-            if prev is None or p.confidence_score > prev:
-                top_conf_by_match[p.match_id] = p.confidence_score
-
-    grouped: dict[str, list[dict]] = defaultdict(list)
-    for m in filtered_matches:
-        odds_rows = odds_by_match.get(m.id, [])
-        if not odds_rows:
-            continue
-        if min_odd > 1.01 and not any(o.iddaa_odd >= min_odd for o in odds_rows):
-            continue
-
-        grouped[m.league].append({
-            "match_id": m.id,
-            "league": m.league,
-            "is_major_league": m.is_major_league,
-            "home_team": m.home_team,
-            "away_team": m.away_team,
-            "home_logo_url": m.home_logo_url,
-            "away_logo_url": m.away_logo_url,
-            "league_logo_url": m.league_logo_url,
-            "status": m.status,
-            "home_score": m.home_score,
-            "away_score": m.away_score,
-            **_match_time_info(m.start_time_utc),
-            "top_confidence": top_conf_by_match.get(m.id),
-            "odds": [
-                {
-                    "market_key": o.market_key,
-                    "selection_key": o.selection_key,
-                    "iddaa_odd": o.iddaa_odd,
-                    "opening_odd": o.opening_odd,
-                    "global_avg_odd": o.global_avg_odd,
-                }
-                for o in odds_rows
-            ],
-        })
-
-    leagues_list = [{"league": lg, "matches": ms} for lg, ms in grouped.items()]
-    return _cache_set(cache_key, {"leagues_count": len(leagues_list), "leagues": leagues_list})
 
 
 @router.get("/matches/{match_id}")
@@ -596,20 +509,107 @@ def trigger_manual_refresh(
     return {"status": "started", "retry_after_sec": MANUAL_REFRESH_COOLDOWN_SEC}
 
 
+def _serialize_coupon(c: Coupon, now_utc: datetime) -> dict:
+    items_out = []
+    for item in c.items:
+        p = item.prediction
+        m = p.match
+        m_start = m.start_time_utc.replace(tzinfo=timezone.utc) if m.start_time_utc.tzinfo is None else m.start_time_utc
+        tr_dt = to_tr_datetime(m.start_time_utc)
+        if p.status in ("WON", "LOST", "VOID"):
+            leg_res = p.status
+        elif m.status == "LIVE" or (m.status == "SCHEDULED" and m_start <= now_utc):
+            leg_res = "LIVE"
+        else:
+            leg_res = "PENDING"
+        items_out.append({
+            "prediction_id": p.id,
+            "match_id": p.match_id,
+            "league": m.league,
+            "home_team": m.home_team,
+            "away_team": m.away_team,
+            "home_logo_url": m.home_logo_url,
+            "away_logo_url": m.away_logo_url,
+            "league_logo_url": m.league_logo_url,
+            "start_date_tr": tr_dt.strftime("%d.%m"),
+            "start_time_tr": tr_dt.strftime("%H:%M"),
+            "market_key": p.market_key,
+            "selection_key": p.selection_key,
+            "iddaa_odd": p.iddaa_odd,
+            "confidence_score": p.confidence_score,
+            "status": p.status,
+            "match_status": m.status,
+            "home_score": m.home_score,
+            "away_score": m.away_score,
+            "leg_result": leg_res,
+        })
+    return {
+        "id": c.id,
+        "coupon_date": c.coupon_date,
+        "tier": c.tier,
+        "total_odd": c.total_odd,
+        "avg_confidence": c.avg_confidence,
+        "status": c.status,
+        "is_locked": bool(c.is_locked),
+        "items": items_out,
+    }
+
+
+def _query_coupon_history(db: Session, days: int = 14) -> list[dict]:
+    cutoff_date = (tr_now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    hist = (
+        db.query(Coupon)
+        .options(joinedload(Coupon.items).joinedload(CouponItem.prediction).joinedload(Prediction.match))
+        .filter(Coupon.status.in_(["WON", "LOST"]), Coupon.coupon_date >= cutoff_date)
+        .order_by(Coupon.coupon_date.desc(), Coupon.id.desc())
+        .all()
+    )
+    now_utc = datetime.now(timezone.utc)
+    return [_serialize_coupon(c, now_utc) for c in hist]
+
+
 @router.get("/coupons")
-def get_coupons(db: Session = Depends(get_db)):
-    cached = _cache_get("coupons")
+def get_coupons(
+    include_history: bool = Query(default=False),
+    db: Session = Depends(get_db),
+):
+    cache_key = f"coupons:{include_history}"
+    cached = _cache_get(cache_key)
     if cached is not None:
         return cached
 
     today_str = tr_today_str()
-    coupons = (
-        db.query(Coupon)
-        .options(joinedload(Coupon.items).joinedload(CouponItem.prediction).joinedload(Prediction.match))
-        .filter(Coupon.coupon_date == today_str)
-        .order_by(Coupon.id.asc())
-        .all()
-    )
+    now_utc = datetime.now(timezone.utc)
+    coupons: list[Coupon] = []
+
+    for tier in ("BANKO", "DENGELI", "SURPRIZ"):
+        # 1. Active PENDING locked/started coupon (survives midnight until all legs finish)
+        active_pending = (
+            db.query(Coupon)
+            .options(joinedload(Coupon.items).joinedload(CouponItem.prediction).joinedload(Prediction.match))
+            .filter(
+                Coupon.tier == tier,
+                Coupon.status == "PENDING",
+                or_(Coupon.coupon_date == today_str, Coupon.is_locked.is_(True)),
+            )
+            .order_by(Coupon.coupon_date.desc(), Coupon.id.desc())
+            .first()
+        )
+        if active_pending:
+            coupons.append(active_pending)
+            continue
+
+        # 2. Otherwise today's coupon (e.g. already settled today)
+        today_coupon = (
+            db.query(Coupon)
+            .options(joinedload(Coupon.items).joinedload(CouponItem.prediction).joinedload(Prediction.match))
+            .filter(Coupon.tier == tier, Coupon.coupon_date == today_str)
+            .order_by(Coupon.id.desc())
+            .first()
+        )
+        if today_coupon:
+            coupons.append(today_coupon)
+
     if not coupons:
         coupons = (
             db.query(Coupon)
@@ -619,51 +619,19 @@ def get_coupons(db: Session = Depends(get_db)):
             .all()
         )
 
-    now_utc = datetime.now(timezone.utc)
-    out = []
-    for c in coupons:
-        items_out = []
-        for item in c.items:
-            p = item.prediction
-            m = p.match
-            m_start = m.start_time_utc.replace(tzinfo=timezone.utc) if m.start_time_utc.tzinfo is None else m.start_time_utc
-            if p.status in ("WON", "LOST", "VOID"):
-                leg_res = p.status
-            elif m.status == "LIVE" or (m.status == "SCHEDULED" and m_start <= now_utc):
-                leg_res = "LIVE"
-            else:
-                leg_res = "PENDING"
-            items_out.append({
-                "prediction_id": p.id,
-                "match_id": p.match_id,
-                "league": m.league,
-                "home_team": m.home_team,
-                "away_team": m.away_team,
-                "home_logo_url": m.home_logo_url,
-                "away_logo_url": m.away_logo_url,
-                "league_logo_url": m.league_logo_url,
-                "start_time_tr": to_tr_datetime(m.start_time_utc).strftime("%H:%M"),
-                "market_key": p.market_key,
-                "selection_key": p.selection_key,
-                "iddaa_odd": p.iddaa_odd,
-                "confidence_score": p.confidence_score,
-                "status": p.status,
-                "match_status": m.status,
-                "home_score": m.home_score,
-                "away_score": m.away_score,
-                "leg_result": leg_res,
-            })
-        out.append({
-            "id": c.id,
-            "coupon_date": c.coupon_date,
-            "tier": c.tier,
-            "total_odd": c.total_odd,
-            "avg_confidence": c.avg_confidence,
-            "status": c.status,
-            "is_locked": bool(c.is_locked),
-            "items": items_out,
-        })
-    return _cache_set("coupons", {"coupons": out})
+    out = [_serialize_coupon(c, now_utc) for c in coupons]
+    payload: dict[str, Any] = {"coupons": out}
+    if include_history:
+        payload["history"] = _query_coupon_history(db, days=14)
+    return _cache_set(cache_key, payload)
+
+
+@router.get("/coupons/history")
+def get_coupons_history(db: Session = Depends(get_db)):
+    cached = _cache_get("coupons_history")
+    if cached is not None:
+        return cached
+    return _cache_set("coupons_history", {"coupons": _query_coupon_history(db, days=14)})
 
 
 @router.get("/performance")

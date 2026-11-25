@@ -49,16 +49,35 @@ export function CouponsPage({
   onSelectMatch,
   refreshTrigger,
 }: Props) {
+  const [subTab, setSubTab] = useState<"active" | "history">("active");
   const [coupons, setCoupons] = useState<CouponData[]>([]);
+  const [historyCoupons, setHistoryCoupons] = useState<CouponData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [sharePayload, setSharePayload] = useState<ShareCouponPayload | null>(null);
 
   useEffect(() => {
-    setLoading(true);
-    api
-      .getCoupons()
-      .then((res) => setCoupons(res.coupons))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    if (coupons.length === 0) setLoading(true);
+    if (historyCoupons.length === 0) setHistoryLoading(true);
+    Promise.all([
+      api.getCoupons().then((res) => {
+        if (!cancelled) setCoupons(res.coupons);
+      }),
+      api.getCouponHistory().then((res) => {
+        if (!cancelled) setHistoryCoupons(res.coupons);
+      }),
+    ])
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+          setHistoryLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [refreshTrigger]);
 
   const customTotalOdd = slipItems.reduce((acc, x) => acc * x.iddaa_odd, 1);
@@ -87,8 +106,43 @@ export function CouponsPage({
 
   return (
     <div className="space-y-5">
+      {/* Güncel Kuponlar | Geçmiş Kuponlar Switch */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setSubTab("active")}
+          className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${
+            subTab === "active"
+              ? "bg-[#00FF85] text-[#05080D] shadow-[0_0_18px_-4px_rgba(0,255,133,0.75)]"
+              : "glass-card text-slate-300 hover:text-white"
+          }`}
+        >
+          Güncel Kuponlar
+        </button>
+        <button
+          onClick={() => setSubTab("history")}
+          className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-bold transition-all ${
+            subTab === "history"
+              ? "bg-[#00FF85] text-[#05080D] shadow-[0_0_18px_-4px_rgba(0,255,133,0.75)]"
+              : "glass-card text-slate-300 hover:text-white"
+          }`}
+        >
+          Geçmiş Kuponlar
+          {historyCoupons.length > 0 && (
+            <span
+              className={`px-1.5 py-0.5 rounded-full text-[10px] mono-nums ${
+                subTab === "history"
+                  ? "bg-[#05080D]/20 text-[#05080D]"
+                  : "bg-white/10 text-slate-300"
+              }`}
+            >
+              {historyCoupons.length}
+            </span>
+          )}
+        </button>
+      </div>
+
       {/* Custom User Slip */}
-      {slipItems.length > 0 && (
+      {subTab === "active" && slipItems.length > 0 && (
         <div className="p-4 rounded-2xl glass-card border-[#00FF85]/40 neon-bottom-glow space-y-3">
           <div className="flex items-center justify-between">
             <div>
@@ -145,7 +199,7 @@ export function CouponsPage({
       )}
 
       {/* Daily Auto Coupons */}
-      {loading ? (
+      {subTab === "active" && (loading ? (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {[1, 2, 3].map((n) => (
             <div key={n} className="h-64 rounded-2xl bg-[#131926] border border-[#1F2937] animate-pulse" />
@@ -242,7 +296,9 @@ export function CouponsPage({
                       >
                         <div className="flex justify-between text-[10px] text-slate-400 mb-0.5">
                           <span className="truncate">{it.league}</span>
-                          <span className="mono-nums shrink-0">{it.start_time_tr}</span>
+                          <span className="mono-nums shrink-0">
+                            {it.start_date_tr ? `${it.start_date_tr} ${it.start_time_tr}` : it.start_time_tr}
+                          </span>
                         </div>
                         <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
                           <TeamBadge name={it.home_team} logoUrl={it.home_logo_url} size="sm" />
@@ -306,6 +362,7 @@ export function CouponsPage({
                         couponDate: c.coupon_date,
                         totalOdd: c.total_odd,
                         avgConfidence: c.avg_confidence,
+                        couponStatus: c.status,
                         items: c.items,
                         textPayload,
                       })
@@ -319,6 +376,172 @@ export function CouponsPage({
             );
           })}
         </div>
+      ))}
+
+      {/* Settled Coupon History (Last 14 Days) */}
+      {subTab === "history" && (
+        historyLoading ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {[1, 2, 3].map((n) => (
+              <div key={n} className="h-64 rounded-2xl bg-[#131926] border border-[#1F2937] animate-pulse" />
+            ))}
+          </div>
+        ) : historyCoupons.length === 0 ? (
+          <div className="p-8 text-center rounded-2xl glass-card">
+            <p className="text-sm font-semibold text-slate-200">
+              Son 14 günde sonuçlanmış kupon henüz yok.
+            </p>
+            <p className="text-xs text-slate-400 mt-1">
+              Oynanan kuponlar tüm ayakları tamamlandığında otomatik olarak buraya taşınır.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {historyCoupons.map((c) => {
+              const meta = TIER_META[c.tier] || TIER_META.BANKO;
+              const Icon = meta.icon;
+              const isWon = c.status === "WON";
+              const textPayload =
+                `Fikstra • ${meta.title} (${c.coupon_date}) • ${isWon ? "KAZANDI" : "KAYBETTİ"}\n` +
+                c.items
+                  .map(
+                    (it) =>
+                      `• ${it.home_team} - ${it.away_team} (${it.home_score ?? "-"}-${it.away_score ?? "-"}) | ${formatMarketLabel(it.market_key, it.selection_key)} @ ${it.iddaa_odd.toFixed(2)}`
+                  )
+                  .join("\n") +
+                `\nToplam Oran: ${c.total_odd.toFixed(2)}`;
+
+              return (
+                <div
+                  key={c.id}
+                  className={`flex flex-col justify-between p-4 rounded-2xl glass-card ${
+                    isWon ? "border-emerald-500/40" : "border-rose-500/30"
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-start justify-between gap-2 mb-3">
+                      <div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-bold ${meta.badge}`}
+                          >
+                            <Icon className="w-3.5 h-3.5" />
+                            {meta.title}
+                          </span>
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[10px] font-extrabold ${
+                              isWon
+                                ? "bg-emerald-500/20 border-emerald-500/45 text-emerald-300"
+                                : "bg-rose-500/20 border-rose-500/45 text-rose-300"
+                            }`}
+                          >
+                            {isWon ? "KAZANDI" : "KAYBETTİ"}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-1.5 mono-nums">
+                          {c.coupon_date}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] text-slate-400 block">Toplam</span>
+                        <span className="text-lg font-extrabold mono-nums text-white">
+                          {c.total_odd.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 my-3">
+                      {c.items.map((it) => {
+                        const legWon = it.leg_result === "WON";
+                        const legLost = it.leg_result === "LOST";
+                        return (
+                          <div
+                            key={it.prediction_id}
+                            onClick={() =>
+                              onSelectMatch(it.match_id, {
+                                market_key: it.market_key,
+                                selection_key: it.selection_key,
+                                iddaa_odd: it.iddaa_odd,
+                              })
+                            }
+                            className="cursor-pointer p-2.5 rounded-xl bg-[#0B0F17] border border-[#1F2937] hover:border-slate-600"
+                          >
+                            <div className="flex justify-between text-[10px] text-slate-400 mb-0.5">
+                              <span className="truncate">{it.league}</span>
+                              <span className="mono-nums shrink-0">
+                                {it.start_date_tr
+                                  ? `${it.start_date_tr} ${it.start_time_tr}`
+                                  : it.start_time_tr}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2 mt-0.5 min-w-0">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <TeamBadge name={it.home_team} logoUrl={it.home_logo_url} size="sm" />
+                                <p className="text-xs font-semibold text-slate-100 truncate">
+                                  {it.home_team} vs {it.away_team}
+                                </p>
+                                <TeamBadge name={it.away_team} logoUrl={it.away_logo_url} size="sm" />
+                              </div>
+                              {it.home_score != null && it.away_score != null && (
+                                <span className="text-xs font-extrabold mono-nums text-white shrink-0">
+                                  {it.home_score}-{it.away_score}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center justify-between mt-1.5 text-xs gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="text-emerald-400 font-bold truncate">
+                                  {formatMarketLabel(it.market_key, it.selection_key)}
+                                </span>
+                                {(legWon || legLost) && (
+                                  <span
+                                    className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-extrabold shrink-0 ${
+                                      legWon
+                                        ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-300"
+                                        : "bg-rose-500/20 border-rose-500/40 text-rose-300"
+                                    }`}
+                                  >
+                                    {legWon ? "KAZANDI" : "KAYBETTİ"}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="font-bold text-white mono-nums shrink-0">
+                                {it.iddaa_odd.toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="pt-3 border-t border-[#1F2937] flex items-center justify-between">
+                    <span className="text-[11px] text-slate-400 mono-nums">
+                      Ort. Güven: {c.avg_confidence.toFixed(1)} / 100
+                    </span>
+                    <button
+                      onClick={() =>
+                        setSharePayload({
+                          tier: (c.tier as "BANKO" | "DENGELI" | "SURPRIZ") || "BANKO",
+                          title: meta.title,
+                          couponDate: c.coupon_date,
+                          totalOdd: c.total_odd,
+                          avgConfidence: c.avg_confidence,
+                          couponStatus: c.status,
+                          items: c.items,
+                          textPayload,
+                        })
+                      }
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/35 hover:bg-emerald-500/25 text-xs font-bold text-emerald-300"
+                    >
+                      <Share2 className="w-3.5 h-3.5" /> Kuponu Paylaş
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )
       )}
 
       <CouponShareModal payload={sharePayload} onClose={() => setSharePayload(null)} />

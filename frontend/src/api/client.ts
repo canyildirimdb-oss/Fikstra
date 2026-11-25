@@ -1,5 +1,4 @@
 import type {
-  BulletinLeague,
   CouponData,
   DashboardSummary,
   MatchDetail,
@@ -23,12 +22,6 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   getSummary: () => requestJson<DashboardSummary>("/api/dashboard/summary"),
 
-  triggerRefresh: () =>
-    requestJson<{ status: "started" | "cooldown" | "already_running"; retry_after_sec?: number }>(
-      "/api/refresh",
-      { method: "POST" }
-    ),
-
   getPredictions: (params: {
     todayOnly: boolean;
     majorOnly: boolean;
@@ -48,23 +41,6 @@ export const api = {
     return requestJson<{ count: number; items: PredictionItem[] }>(`/api/predictions?${qs}`);
   },
 
-  getBulletin: (params: {
-    todayOnly: boolean;
-    majorOnly: boolean;
-    minOdd: number;
-    market: string;
-    search?: string;
-  }) => {
-    const qs = new URLSearchParams({
-      today_only: String(params.todayOnly),
-      major_only: String(params.majorOnly),
-      min_odd: String(params.minOdd),
-      market: params.market,
-    });
-    if (params.search?.trim()) qs.set("search", params.search.trim());
-    return requestJson<{ leagues_count: number; leagues: BulletinLeague[] }>(`/api/matches?${qs}`);
-  },
-
   getMatchDetail: (matchId: number, marketKey?: string, selectionKey?: string) => {
     const qs = new URLSearchParams();
     if (marketKey) qs.set("market_key", marketKey);
@@ -80,6 +56,8 @@ export const api = {
     ),
 
   getCoupons: () => requestJson<{ coupons: CouponData[] }>("/api/coupons"),
+
+  getCouponHistory: () => requestJson<{ coupons: CouponData[] }>("/api/coupons/history"),
 
   getPerformance: () => requestJson<PerformanceData>("/api/performance"),
 
