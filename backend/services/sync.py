@@ -113,6 +113,7 @@ def run_sync_pipeline(
     max_external_enrich: int = 40,
     max_tm_fresh: int = 16,
     include_injuries: bool = True,
+    skip_odds_api: bool = False,
 ) -> dict[str, Any]:
     """Run Engine v5.1 sync: double-lock (in-process + 15m DB lock), iddaa, ESPN, ClubElo, TM, Poisson."""
     if not _SYNC_LOCK.acquire(blocking=False):
@@ -533,7 +534,11 @@ def run_sync_pipeline(
         db.commit()
         # Ensure all remaining SCHEDULED matches (including non-ESPN leagues) get global form & recent_v4
         refresh_all_active_forms(db, force_refresh=False, only_missing=True)
-        odds_api_res = sync_the_odds_api(db)
+        odds_api_res = (
+            {"status": "skipped", "api_calls": 0, "cache_hits": 0, "matched": 0}
+            if skip_odds_api
+            else sync_the_odds_api(db)
+        )
         db.commit()
         # Lock closing odds & CLV for matches starting within <= 25 minutes
         closing_cutoff = now + timedelta(minutes=25)

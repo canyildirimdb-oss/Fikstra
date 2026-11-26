@@ -248,6 +248,7 @@ def trigger_cron_settle(
 def trigger_cron_sync(
     background_tasks: BackgroundTasks,
     response: Response,
+    skip_odds_api: bool = False,
     x_cron_secret: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
@@ -261,7 +262,7 @@ def trigger_cron_sync(
             "message": "Sync already running in background",
         }
 
-    background_tasks.add_task(run_sync_pipeline)
+    background_tasks.add_task(run_sync_pipeline, skip_odds_api=skip_odds_api)
     response.status_code = status.HTTP_202_ACCEPTED
     return {
         "status": "accepted",

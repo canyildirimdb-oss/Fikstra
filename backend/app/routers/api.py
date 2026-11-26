@@ -576,6 +576,7 @@ MANUAL_REFRESH_KEY = "system:manual_refresh_at"
 @router.post("/refresh")
 def trigger_manual_refresh(
     background_tasks: BackgroundTasks,
+    skip_odds_api: bool = False,
     x_cron_secret: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
@@ -585,7 +586,7 @@ def trigger_manual_refresh(
     if is_sync_running(db):
         return {"status": "already_running"}
 
-    background_tasks.add_task(run_sync_pipeline)
+    background_tasks.add_task(run_sync_pipeline, skip_odds_api=skip_odds_api)
     return {"status": "started", "retry_after_sec": MANUAL_REFRESH_COOLDOWN_SEC}
 
 
