@@ -148,12 +148,27 @@ def _build_match_detail_ctx(db: Session, m: Match, top_pred: Optional[Prediction
     if cached_rm is None:
         cached_rm = {"home": [], "away": []}
         try:
-            h_prof = fetch_global_team_recent_matches(
-                m.home_team, match_start_utc=m.start_time_utc, prefer_home=True, db=db, timeout=5.5
-            )
-            a_prof = fetch_global_team_recent_matches(
-                m.away_team, match_start_utc=m.start_time_utc, prefer_home=False, db=db, timeout=5.5
-            )
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                f_h = pool.submit(
+                    fetch_global_team_recent_matches,
+                    m.home_team,
+                    match_start_utc=m.start_time_utc,
+                    prefer_home=True,
+                    db=None,
+                    timeout=5.0,
+                )
+                f_a = pool.submit(
+                    fetch_global_team_recent_matches,
+                    m.away_team,
+                    match_start_utc=m.start_time_utc,
+                    prefer_home=False,
+                    db=None,
+                    timeout=5.0,
+                )
+                h_prof = f_h.result()
+                a_prof = f_a.result()
             cached_rm = {
                 "home": h_prof.get("recent_matches") or [],
                 "away": a_prof.get("recent_matches") or [],

@@ -719,7 +719,7 @@ def refresh_all_active_forms(
             return nk, {"form": [], "recent_matches": [], "goals_avg": None, "conceded_avg": None, "rest_days": None, "source": None}
 
     results_by_norm: dict[str, dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         for nk, res in pool.map(_fetch_team, list(team_tasks.items())):
             results_by_norm[nk] = res
             if res.get("recent_matches"):

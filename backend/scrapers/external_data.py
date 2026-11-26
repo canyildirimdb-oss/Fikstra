@@ -34,6 +34,7 @@ ESPN_LEAGUES = [
 # In-memory cache with 6h TTL for Transfermarkt club injury lookups
 _TM_INJURY_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _TM_CACHE_TTL_SEC = 6 * 3600.0
+_365_DEAD_UNTIL: float = 0.0
 
 
 def american_to_decimal(raw: Any) -> Optional[float]:
@@ -1341,6 +1342,10 @@ def _fetch_365scores_team_records(
     team_name: str,
     ref_utc: datetime,
 ) -> list[dict[str, Any]]:
+    global _365_DEAD_UNTIL
+    if time.monotonic() < _365_DEAD_UNTIL:
+        return []
+
     queries = [team_name]
     norm_q = normalize_team_name(team_name)
     if norm_q and norm_q.lower() != team_name.lower():
@@ -1352,7 +1357,7 @@ def _fetch_365scores_team_records(
         try:
             rs = client.get(
                 f"https://webws.365scores.com/web/search/?query={quote_plus(q)}&langId=1&timezoneName=Europe/Istanbul",
-                timeout=3.5,
+                timeout=2.5,
             )
             if rs.status_code != 200:
                 continue
@@ -1367,6 +1372,7 @@ def _fetch_365scores_team_records(
             if best_cid:
                 break
         except Exception:
+            _365_DEAD_UNTIL = time.monotonic() + 600.0
             return []
 
     if not best_cid:
@@ -1375,12 +1381,13 @@ def _fetch_365scores_team_records(
     try:
         rg = client.get(
             f"https://webws.365scores.com/web/games/results/?competitors={best_cid}&langId=1&timezoneName=Europe/Istanbul",
-            timeout=4.5,
+            timeout=3.0,
         )
         if rg.status_code != 200:
             return []
         games = rg.json().get("games") or []
     except Exception:
+        _365_DEAD_UNTIL = time.monotonic() + 600.0
         return []
 
     records: list[dict[str, Any]] = []
@@ -1631,10 +1638,10 @@ def fetch_global_team_recent_matches(
             return cached
 
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    with httpx.Client(timeout=timeout, headers=headers) as client:
+    with httpx.Client(timeout=httpx.Timeout(timeout, connect=2.5), headers=headers) as client:
         sources: list[tuple[str, Any]] = [
-            ("365scores", lambda: _fetch_365scores_team_records(client, team_name, ref_utc)),
             ("fotmob", lambda: _fetch_fotmob_team_records(client, team_name, ref_utc)),
+            ("365scores", lambda: _fetch_365scores_team_records(client, team_name, ref_utc)),
         ]
         if team_espn_id:
             sources.append(
