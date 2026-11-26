@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import ensure_schema, get_db
-from app.models import Coupon, CouponItem, Match, Prediction, PushSubscription, ScraperCache, SyncLog
+from app.models import Coupon, CouponItem, Match, Prediction, PushSubscription, ScraperCache, SiteAnnouncement, SyncLog, TelegramDispatch
 from app.routers.api import clear_api_cache, router as api_router
 from app.telegram_bot import (
     check_and_send_health_alerts,
@@ -28,6 +28,7 @@ from app.telegram_bot import (
     send_telegram_test_messages,
     setup_telegram_webhook,
 )
+from services.ai_summary import is_gemini_circuit_open
 from services.settlement import settle_coupons, settle_finished_matches
 from services.sync import is_sync_running, run_sync_pipeline
 
@@ -303,6 +304,167 @@ def admin_telegram_test(x_cron_secret: Optional[str] = Header(default=None)):
 def admin_telegram_setup_webhook(x_cron_secret: Optional[str] = Header(default=None)):
     _verify_cron_secret(x_cron_secret)
     return setup_telegram_webhook()
+
+
+class AnnouncementCreateIn(BaseModel):
+    text: str
+    link_url: Optional[str] = None
+    expires_hours: Optional[int] = None
+
+
+class AnnouncementPatchIn(BaseModel):
+    is_active: Optional[bool] = None
+
+
+def _serialize_announcement(a: SiteAnnouncement) -> dict:
+    return {
+        "id": a.id,
+        "text": a.text,
+        "link_url": a.link_url,
+        "is_active": a.is_active,
+        "expires_at": a.expires_at.isoformat() if a.expires_at else None,
+        "created_at": a.created_at.isoformat() if a.created_at else None,
+    }
+
+
+@app.get("/api/admin/overview")
+def admin_overview(
+    x_cron_secret: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _verify_cron_secret(x_cron_secret)
+    now_utc = datetime.now(timezone.utc)
+
+    # Odds API credits from ScraperCache (0 external API calls)
+    odds_remaining = None
+    odds_used = None
+    credit_row = db.query(ScraperCache).filter(ScraperCache.cache_key == "odds_api:remaining_credits").first()
+    if credit_row and credit_row.payload_json:
+        try:
+            c_data = json.loads(credit_row.payload_json)
+            odds_remaining = c_data.get("remaining")
+            odds_used = c_data.get("used")
+        except Exception:
+            pass
+
+    last_sync = db.query(SyncLog).order_by(SyncLog.started_at.desc()).first()
+    last_sync_at = None
+    if last_sync:
+        dt = last_sync.finished_at or last_sync.started_at
+        last_sync_at = dt.isoformat() if dt else None
+
+    last_settle_at = None
+    settle_row = db.query(ScraperCache).filter(ScraperCache.cache_key == LAST_SETTLE_KEY).first()
+    if settle_row and settle_row.payload_json:
+        try:
+            last_settle_at = json.loads(settle_row.payload_json).get("settled_at")
+        except Exception:
+            pass
+
+    void_24h = (
+        db.query(Prediction.id)
+        .filter(
+            Prediction.status == "VOID",
+            Prediction.settled_at.isnot(None),
+            Prediction.settled_at >= now_utc - timedelta(hours=24),
+        )
+        .count()
+    )
+
+    dispatches = (
+        db.query(TelegramDispatch)
+        .order_by(TelegramDispatch.updated_at.desc(), TelegramDispatch.id.desc())
+        .limit(15)
+        .all()
+    )
+    announcements = (
+        db.query(SiteAnnouncement)
+        .order_by(SiteAnnouncement.created_at.desc(), SiteAnnouncement.id.desc())
+        .all()
+    )
+
+    return {
+        "odds_api_remaining": odds_remaining,
+        "odds_api_used": odds_used,
+        "last_sync_at": last_sync_at,
+        "last_sync_status": last_sync.status if last_sync else None,
+        "last_settle_at": last_settle_at,
+        "void_24h_count": void_24h,
+        "gemini_circuit_open": is_gemini_circuit_open(),
+        "telegram_admin_configured": bool((settings.telegram_admin_chat_id or "").strip()),
+        "recent_dispatches": [
+            {
+                "id": d.id,
+                "kind": d.kind,
+                "dispatch_key": d.dispatch_key,
+                "settled_replied": d.settled_replied,
+                "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+            }
+            for d in dispatches
+        ],
+        "announcements": [_serialize_announcement(a) for a in announcements],
+    }
+
+
+@app.post("/api/admin/announcements")
+def admin_create_announcement(
+    payload: AnnouncementCreateIn,
+    x_cron_secret: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _verify_cron_secret(x_cron_secret)
+    txt = (payload.text or "").strip()
+    if not txt or len(txt) > 220:
+        raise HTTPException(status_code=400, detail="Announcement text must be 1-220 characters")
+
+    link = (payload.link_url or "").strip() or None
+    if link and not (link.startswith("https://") or link.startswith("http://") or link.startswith("/")):
+        raise HTTPException(status_code=400, detail="Invalid link_url scheme")
+
+    expires_at = None
+    if payload.expires_hours is not None and payload.expires_hours > 0:
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=int(payload.expires_hours))
+
+    ann = SiteAnnouncement(text=txt, link_url=link[:300] if link else None, is_active=True, expires_at=expires_at)
+    db.add(ann)
+    db.commit()
+    db.refresh(ann)
+    return _serialize_announcement(ann)
+
+
+@app.patch("/api/admin/announcements/{ann_id}")
+def admin_patch_announcement(
+    ann_id: int,
+    payload: Optional[AnnouncementPatchIn] = None,
+    x_cron_secret: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _verify_cron_secret(x_cron_secret)
+    ann = db.query(SiteAnnouncement).filter(SiteAnnouncement.id == ann_id).first()
+    if not ann:
+        raise HTTPException(status_code=404, detail="Announcement not found")
+    if payload and payload.is_active is not None:
+        ann.is_active = bool(payload.is_active)
+    else:
+        ann.is_active = not ann.is_active
+    db.commit()
+    db.refresh(ann)
+    return _serialize_announcement(ann)
+
+
+@app.delete("/api/admin/announcements/{ann_id}")
+def admin_delete_announcement(
+    ann_id: int,
+    x_cron_secret: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _verify_cron_secret(x_cron_secret)
+    ann = db.query(SiteAnnouncement).filter(SiteAnnouncement.id == ann_id).first()
+    if not ann:
+        raise HTTPException(status_code=404, detail="Announcement not found")
+    db.delete(ann)
+    db.commit()
+    return {"ok": True, "deleted_id": ann_id}
 
 
 @app.post("/api/telegram/webhook")

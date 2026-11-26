@@ -1026,6 +1026,7 @@ export function MatchDetailDrawer({
                     onClick={() =>
                       onToggleSlip({
                         match_id: detail.match_id,
+                        prediction_id: detail.top_prediction?.prediction_id,
                         home_team: detail.home_team,
                         away_team: detail.away_team,
                         market_key: activePick.market_key,

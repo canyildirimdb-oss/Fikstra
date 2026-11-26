@@ -20,6 +20,7 @@ from app.models import (
     OddsHistory,
     Prediction,
     ScraperCache,
+    SiteAnnouncement,
     SyncLog,
 )
 from scrapers.iddaa import is_youth_or_women_match
@@ -765,6 +766,8 @@ def get_performance(db: Session = Depends(get_db)):
         for p in settled[:50]
     ]
 
+    breakdown = _compute_performance_breakdown(db)
+
     return _cache_set(
         "performance",
         {
@@ -778,5 +781,177 @@ def get_performance(db: Session = Depends(get_db)):
             "trend": trend,
             "coupon_tiers": tier_stats,
             "archive": archive,
+            "breakdown": breakdown,
         },
     )
+
+
+def _market_group_label(market_key: str) -> str:
+    mk = (market_key or "").upper()
+    if mk == "MS":
+        return "MS"
+    if mk == "CS":
+        return "Çifte Şans"
+    if mk.startswith("AU_"):
+        return "Gol Alt/Üst"
+    if mk == "KG":
+        return "KG"
+    return mk or "Diğer"
+
+
+def _format_pick_short(market_key: str, selection_key: str) -> str:
+    mk = (market_key or "").upper()
+    sk = (selection_key or "").upper()
+    if mk == "MS":
+        return f"MS {sk}"
+    if mk == "CS":
+        return f"ÇŞ {sk}"
+    if mk.startswith("AU_"):
+        line = mk.split("_", 1)[1] if "_" in mk else "2.5"
+        return f"{line} {'Üst' if sk == 'UST' else 'Alt'}"
+    if mk == "KG":
+        return "KG Var" if sk == "VAR" else "KG Yok"
+    return f"{market_key} {selection_key}".strip()
+
+
+def _compute_performance_breakdown(db: Session) -> dict[str, list[dict[str, Any]]]:
+    rows = (
+        db.query(Prediction)
+        .options(joinedload(Prediction.match))
+        .join(Match, Prediction.match_id == Match.id)
+        .filter(
+            Prediction.status.in_(["WON", "LOST", "VOID"]),
+            Prediction.is_top_pick.is_(True),
+            func.coalesce(Prediction.published_confidence, Prediction.confidence_score) >= 60.0,
+        )
+        .order_by(Prediction.settled_at.desc(), Prediction.confidence_score.desc())
+        .all()
+    )
+    seen_matches: set[int] = set()
+    by_league: dict[str, dict[str, int]] = defaultdict(lambda: {"won": 0, "lost": 0, "void": 0})
+    by_market: dict[str, dict[str, int]] = defaultdict(lambda: {"won": 0, "lost": 0, "void": 0})
+
+    for p in rows:
+        if p.match_id in seen_matches or not p.match:
+            continue
+        seen_matches.add(p.match_id)
+        lg = p.match.league or "Diğer"
+        mg = _market_group_label(p.market_key)
+        st = (p.status or "").upper()
+        for bucket in (by_league[lg], by_market[mg]):
+            if st == "WON":
+                bucket["won"] += 1
+            elif st == "LOST":
+                bucket["lost"] += 1
+            elif st == "VOID":
+                bucket["void"] += 1
+
+    def _serialize(groups: dict[str, dict[str, int]]) -> list[dict[str, Any]]:
+        out = []
+        for label, counts in groups.items():
+            decided = counts["won"] + counts["lost"]
+            low_sample = decided < 5
+            win_rate = round((counts["won"] / decided) * 100.0, 1) if not low_sample else None
+            out.append({
+                "label": label,
+                "won": counts["won"],
+                "lost": counts["lost"],
+                "void": counts["void"],
+                "decided": decided,
+                "low_sample": low_sample,
+                "win_rate": win_rate,
+            })
+        out.sort(key=lambda r: (r["decided"], r["won"]), reverse=True)
+        return out
+
+    return {
+        "by_league": _serialize(by_league),
+        "by_market": _serialize(by_market),
+    }
+
+
+@router.get("/performance/breakdown")
+def get_performance_breakdown(db: Session = Depends(get_db)):
+    cached = _cache_get("performance_breakdown")
+    if cached is not None:
+        return cached
+    return _cache_set("performance_breakdown", _compute_performance_breakdown(db))
+
+
+@router.get("/predictions/status")
+def get_predictions_batch_status(
+    ids: str = Query(default="", description="Comma-separated prediction IDs (max 30)"),
+    db: Session = Depends(get_db),
+):
+    parsed_ids: list[int] = []
+    seen: set[int] = set()
+    for part in (ids or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            pid = int(part)
+        except ValueError:
+            continue
+        if pid > 0 and pid not in seen:
+            seen.add(pid)
+            parsed_ids.append(pid)
+        if len(parsed_ids) >= 30:
+            break
+
+    if not parsed_ids:
+        return {"items": []}
+
+    preds = (
+        db.query(Prediction)
+        .options(joinedload(Prediction.match))
+        .filter(Prediction.id.in_(parsed_ids))
+        .all()
+    )
+    by_id = {p.id: p for p in preds}
+    items = []
+    for pid in parsed_ids:
+        p = by_id.get(pid)
+        if not p or not p.match:
+            continue
+        m = p.match
+        items.append({
+            "id": p.id,
+            "home_team": m.home_team,
+            "away_team": m.away_team,
+            "league": m.league,
+            "kickoff": m.start_time_utc.isoformat() if m.start_time_utc else None,
+            "pick": _format_pick_short(p.market_key, p.selection_key),
+            "market_key": p.market_key,
+            "selection_key": p.selection_key,
+            "odd": p.published_odd if p.published_odd is not None else p.iddaa_odd,
+            "status": p.status,
+            "home_score": m.home_score,
+            "away_score": m.away_score,
+        })
+    return {"items": items}
+
+
+@router.get("/announcements/active")
+def get_active_announcements(db: Session = Depends(get_db)):
+    now_utc = datetime.now(timezone.utc)
+    rows = (
+        db.query(SiteAnnouncement)
+        .filter(
+            SiteAnnouncement.is_active.is_(True),
+            or_(SiteAnnouncement.expires_at.is_(None), SiteAnnouncement.expires_at > now_utc),
+        )
+        .order_by(SiteAnnouncement.created_at.desc(), SiteAnnouncement.id.desc())
+        .all()
+    )
+    return [
+        {
+            "id": a.id,
+            "text": a.text,
+            "link_url": a.link_url,
+            "is_active": a.is_active,
+            "expires_at": a.expires_at.isoformat() if a.expires_at else None,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in rows
+    ]

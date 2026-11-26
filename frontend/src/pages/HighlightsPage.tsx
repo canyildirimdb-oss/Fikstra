@@ -7,6 +7,7 @@ import type {
   DashboardSummary,
   PerformanceData,
   PredictionItem,
+  SiteAnnouncement,
 } from "../types";
 import { formatMarketLabel, formatPickWithTeam, formatTurkishPossessive } from "../utils/format";
 import { ConfidenceRing } from "../components/ConfidenceRing";
@@ -73,6 +74,7 @@ export function HighlightsPage({
   const [items, setItems] = useState<PredictionItem[]>([]);
   const [todayCount, setTodayCount] = useState<number | null>(null);
   const [perf, setPerf] = useState<PerformanceData | null>(null);
+  const [announcements, setAnnouncements] = useState<SiteAnnouncement[]>([]);
   const [loading, setLoading] = useState(true);
   const [slideIdx, setSlideIdx] = useState(0);
   const [tickerPaused, setTickerPaused] = useState(false);
@@ -119,6 +121,12 @@ export function HighlightsPage({
         if (!cancelled) setPerf(p);
       })
       .catch(() => {});
+    api
+      .getActiveAnnouncements()
+      .then((rows) => {
+        if (!cancelled && Array.isArray(rows)) setAnnouncements(rows);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -154,7 +162,22 @@ export function HighlightsPage({
         ? `${summary.settled_total} tahmin sonuçlandı (%${summary.overall_win_rate ?? 0})`
         : "İlk sonuçlar bekleniyor";
 
+    const announcementSlides = announcements.map((ann) => ({
+      key: `ann-${ann.id}`,
+      icon: "announcement" as const,
+      text: ann.text,
+      onClick: () => {
+        if (!ann.link_url) return;
+        if (ann.link_url.startsWith("/")) {
+          window.location.href = ann.link_url;
+        } else {
+          window.open(ann.link_url, "_blank", "noopener,noreferrer");
+        }
+      },
+    }));
+
     return [
+      ...announcementSlides,
       {
         key: "trust",
         icon: "dots" as const,
@@ -185,6 +208,7 @@ export function HighlightsPage({
     ];
   }, [
     perf,
+    announcements,
     summary?.settled_total,
     summary?.overall_win_rate,
     summary?.active_matches_count,
@@ -325,6 +349,11 @@ export function HighlightsPage({
               transition={{ duration: prefersReducedMotion ? 0.12 : 0.22 }}
               className="flex items-center gap-2 min-w-0 w-full"
             >
+              {activeSlide.icon === "announcement" && (
+                <span className="px-1.5 py-0.5 rounded bg-[#00FF85]/20 border border-[#00FF85]/40 text-[#00FF85] text-[9px] font-extrabold tracking-wider shrink-0">
+                  DUYURU
+                </span>
+              )}
               {activeSlide.icon === "telegram" && (
                 <Send className="w-3.5 h-3.5 text-[#00FF85] shrink-0" />
               )}
@@ -533,6 +562,7 @@ export function HighlightsPage({
                       e.stopPropagation();
                       onToggleSlip({
                         match_id: item.match_id,
+                        prediction_id: item.prediction_id,
                         home_team: item.home_team,
                         away_team: item.away_team,
                         market_key: item.market_key,

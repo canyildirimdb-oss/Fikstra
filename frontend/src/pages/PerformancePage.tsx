@@ -49,6 +49,7 @@ export function PerformancePage({ refreshTrigger }: Props) {
   const [data, setData] = useState<PerformanceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [glossaryOpen, setGlossaryOpen] = useState(false);
+  const [breakdownTab, setBreakdownTab] = useState<"league" | "market">("league");
 
   useEffect(() => {
     if (data === null) setLoading(true);
@@ -201,6 +202,101 @@ export function PerformancePage({ refreshTrigger }: Props) {
             );
           })}
         </div>
+      </div>
+
+      {/* Keskinlik Karnesi: Lig & Piyasa Kırılımı */}
+      <div className="p-4 rounded-2xl glass-card space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h4 className="text-xs font-semibold text-slate-200 uppercase tracking-wider">
+              Keskinlik Karnesi
+            </h4>
+            <p className="text-[11px] text-slate-400">
+              Sonuçlanmış resmi 60+ tahminlere göre gerçek isabet dağılımı
+            </p>
+          </div>
+          <div className="flex items-center gap-1 p-1 rounded-xl bg-[#0B0F17] border border-[#1F2937]">
+            <button
+              type="button"
+              onClick={() => setBreakdownTab("league")}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                breakdownTab === "league"
+                  ? "bg-[#00FF85] text-[#05080D]"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >
+              Liglere Göre
+            </button>
+            <button
+              type="button"
+              onClick={() => setBreakdownTab("market")}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                breakdownTab === "market"
+                  ? "bg-[#00FF85] text-[#05080D]"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >
+              Piyasalara Göre
+            </button>
+          </div>
+        </div>
+
+        {(() => {
+          const rows =
+            breakdownTab === "league"
+              ? data.breakdown?.by_league || []
+              : data.breakdown?.by_market || [];
+          if (rows.length === 0) {
+            return (
+              <p className="text-xs text-slate-500 py-3 text-center">
+                Henüz sonuçlanmış 60+ tahmin verisi bulunmuyor.
+              </p>
+            );
+          }
+          return (
+            <div className="space-y-2">
+              {rows.slice(0, 12).map((row) => (
+                <div
+                  key={row.label}
+                  className="p-2.5 rounded-xl bg-[#0B0F17] border border-[#1F2937] space-y-1.5"
+                >
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-semibold text-slate-100 truncate">{row.label}</span>
+                    <div className="flex items-center gap-2 shrink-0 mono-nums">
+                      {row.low_sample ? (
+                        <>
+                          <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] font-semibold">
+                            Az veri
+                          </span>
+                          <span className="font-bold text-slate-200">
+                            {row.won}/{row.decided}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-[11px] text-slate-400">
+                            {row.won}/{row.decided}
+                          </span>
+                          <span className="font-extrabold text-[#00FF85]">
+                            %{row.win_rate}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  {!row.low_sample && row.win_rate !== null && (
+                    <div className="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-[#00FF85]"
+                        style={{ width: `${Math.min(100, Math.max(4, row.win_rate))}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          );
+        })()}
       </div>
 
       {/* Empty State vs Real Settled Chart + Archive */}

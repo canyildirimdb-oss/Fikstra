@@ -227,6 +227,21 @@ export interface BulletinLeague {
   }[];
 }
 
+export interface BreakdownRow {
+  label: string;
+  won: number;
+  lost: number;
+  void: number;
+  decided: number;
+  low_sample: boolean;
+  win_rate: number | null;
+}
+
+export interface PerformanceBreakdown {
+  by_league: BreakdownRow[];
+  by_market: BreakdownRow[];
+}
+
 export interface PerformanceData {
   overall_win_rate: number | null;
   won_count: number;
@@ -251,14 +266,67 @@ export interface PerformanceData {
     confidence_score: number;
     status: string;
   }[];
+  breakdown?: PerformanceBreakdown;
 }
 
 export interface CustomSlipItem {
   match_id: number;
+  prediction_id?: number;
   home_team: string;
   away_team: string;
   market_key: string;
   selection_key: string;
   iddaa_odd: number;
   start_time_utc?: string;
+}
+
+export interface SavedSlip {
+  id: string;
+  created_at: string;
+  total_odd: number;
+  stake: number;
+  items: CustomSlipItem[];
+}
+
+export interface PredictionStatusItem {
+  id: number;
+  home_team: string;
+  away_team: string;
+  league: string;
+  kickoff: string | null;
+  pick: string;
+  market_key: string;
+  selection_key: string;
+  odd: number;
+  status: string;
+  home_score: number | null;
+  away_score: number | null;
+}
+
+export interface SiteAnnouncement {
+  id: number;
+  text: string;
+  link_url: string | null;
+  is_active: boolean;
+  expires_at: string | null;
+  created_at: string | null;
+}
+
+export interface AdminOverviewData {
+  odds_api_remaining: number | null;
+  odds_api_used: string | number | null;
+  last_sync_at: string | null;
+  last_sync_status: string | null;
+  last_settle_at: string | null;
+  void_24h_count: number;
+  gemini_circuit_open: boolean;
+  telegram_admin_configured: boolean;
+  recent_dispatches: {
+    id: number;
+    kind: string;
+    dispatch_key: string;
+    settled_replied: boolean;
+    updated_at: string | null;
+  }[];
+  announcements: SiteAnnouncement[];
 }

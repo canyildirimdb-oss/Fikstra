@@ -123,6 +123,7 @@ def ensure_schema():
         "CREATE INDEX IF NOT EXISTS ix_odds_history_match_recorded ON odds_history (match_id, recorded_at)",
         "CREATE INDEX IF NOT EXISTS ix_coupons_coupon_date ON coupons (coupon_date)",
         "CREATE INDEX IF NOT EXISTS ix_telegram_dispatches_kind_settled ON telegram_dispatches (kind, settled_replied)",
+        "CREATE INDEX IF NOT EXISTS ix_site_announcements_active ON site_announcements (is_active, created_at)",
     ]
     with engine.begin() as conn:
         for stmt in index_stmts:

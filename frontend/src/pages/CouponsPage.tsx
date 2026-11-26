@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
-import { ArrowDownToLine, Layers, Lock, Share2, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowDownToLine, BookmarkPlus, Layers, Lock, Share2, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import { api } from "../api/client";
 import { CouponShareModal } from "../components/CouponShareModal";
 import { StakeCalculator } from "../components/StakeCalculator";
 import { TeamBadge } from "../components/TeamBadge";
-import type { CouponData, CustomSlipItem } from "../types";
+import type { CouponData, CustomSlipItem, PredictionStatusItem, SavedSlip } from "../types";
 import type { ShareCouponPayload } from "../utils/couponShare";
 import { formatMarketLabel } from "../utils/format";
 
@@ -19,6 +19,9 @@ interface Props {
     matchId: number,
     couponPick?: { market_key: string; selection_key: string; iddaa_odd: number }
   ) => void;
+  savedSlips: SavedSlip[];
+  onSaveSlip: () => void;
+  onDeleteSavedSlip: (slipId: string) => void;
   refreshTrigger: number;
 }
 
@@ -54,9 +57,14 @@ export function CouponsPage({
   onClearSlip,
   onImportSlip,
   onSelectMatch,
+  savedSlips,
+  onSaveSlip,
+  onDeleteSavedSlip,
   refreshTrigger,
 }: Props) {
-  const [subTab, setSubTab] = useState<"active" | "history">("active");
+  const [subTab, setSubTab] = useState<"active" | "history" | "tracked">("active");
+  const [trackedStatuses, setTrackedStatuses] = useState<Record<number, PredictionStatusItem>>({});
+  const [trackedLoading, setTrackedLoading] = useState(false);
   const [mobileTier, setMobileTier] = useState<"BANKO" | "DENGELI" | "SURPRIZ">("BANKO");
   const [lockInfoId, setLockInfoId] = useState<number | null>(null);
   const [coupons, setCoupons] = useState<CouponData[]>([]);
@@ -88,6 +96,39 @@ export function CouponsPage({
       cancelled = true;
     };
   }, [refreshTrigger]);
+
+  const trackedPredIds = useMemo(() => {
+    const ids: number[] = [];
+    for (const slip of savedSlips) {
+      for (const item of slip.items) {
+        if (item.prediction_id) ids.push(item.prediction_id);
+      }
+    }
+    return Array.from(new Set(ids)).slice(0, 30);
+  }, [savedSlips]);
+
+  useEffect(() => {
+    if (subTab !== "tracked" || trackedPredIds.length === 0) return;
+    let cancelled = false;
+    setTrackedLoading(true);
+    api
+      .getPredictionStatuses(trackedPredIds)
+      .then((res) => {
+        if (cancelled) return;
+        const map: Record<number, PredictionStatusItem> = {};
+        for (const item of res.items) {
+          map[item.id] = item;
+        }
+        setTrackedStatuses(map);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setTrackedLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [subTab, trackedPredIds, refreshTrigger]);
 
   const customTotalOdd = slipItems.reduce((acc, x) => acc * x.iddaa_odd, 1);
 
@@ -148,7 +189,155 @@ export function CouponsPage({
             </span>
           )}
         </button>
+        <button
+          onClick={() => setSubTab("tracked")}
+          className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-bold transition-all ${
+            subTab === "tracked"
+              ? "bg-[#00FF85] text-[#05080D] shadow-[0_0_18px_-4px_rgba(0,255,133,0.75)]"
+              : "glass-card text-slate-300 hover:text-white"
+          }`}
+        >
+          Takip Ettiklerim
+          {savedSlips.length > 0 && (
+            <span
+              className={`px-1.5 py-0.5 rounded-full text-[10px] mono-nums ${
+                subTab === "tracked"
+                  ? "bg-[#05080D]/20 text-[#05080D]"
+                  : "bg-white/10 text-slate-300"
+              }`}
+            >
+              {savedSlips.length}
+            </span>
+          )}
+        </button>
       </div>
+
+      {/* Tracked User Slips (localStorage + live DB status) */}
+      {subTab === "tracked" && (
+        <div className="space-y-3">
+          {savedSlips.length === 0 ? (
+            <div className="p-8 text-center rounded-2xl glass-card space-y-2">
+              <BookmarkPlus className="w-7 h-7 text-[#00FF85] mx-auto" />
+              <h3 className="text-sm font-bold text-slate-100">Henüz Takip Edilen Kupon Yok</h3>
+              <p className="text-xs text-slate-400 max-w-md mx-auto">
+                Kuponum fişine maç ekleyip &ldquo;Kuponu Takibe Al&rdquo; butonuna bastığında burada
+                üyeliksiz olarak canlı sonuçlarını takip edebilirsin.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {savedSlips.map((slip) => {
+                const legStatuses = slip.items.map((it) =>
+                  it.prediction_id ? trackedStatuses[it.prediction_id]?.status || "PENDING" : "PENDING"
+                );
+                const wonLegs = legStatuses.filter((s) => s === "WON").length;
+                const lostLegs = legStatuses.filter((s) => s === "LOST").length;
+                const voidLegs = legStatuses.filter((s) => s === "VOID").length;
+                const allSettled = legStatuses.every((s) => s !== "PENDING");
+
+                let slipStatus = "BEKLEMEDE";
+                let statusCls = "bg-slate-800 text-slate-300 border-slate-700";
+                if (lostLegs > 0) {
+                  slipStatus = "KAYBETTİ";
+                  statusCls = "bg-rose-500/15 text-rose-300 border-rose-500/35";
+                } else if (allSettled && voidLegs === legStatuses.length) {
+                  slipStatus = "İADE/VOID";
+                  statusCls = "bg-slate-700/60 text-slate-200 border-slate-600";
+                } else if (allSettled && wonLegs > 0) {
+                  slipStatus = "KAZANDI";
+                  statusCls = "bg-emerald-500/15 text-[#00FF85] border-emerald-500/35";
+                }
+
+                const createdLabel = new Date(slip.created_at).toLocaleString("tr-TR", {
+                  timeZone: "Europe/Istanbul",
+                  day: "2-digit",
+                  month: "2-digit",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                });
+
+                return (
+                  <div key={slip.id} className="p-4 rounded-2xl glass-card space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${statusCls}`}>
+                            {slipStatus}
+                          </span>
+                          <span className="text-[11px] font-bold text-slate-300 mono-nums">
+                            {wonLegs}/{slip.items.length} tuttu
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-500 mt-1 mono-nums">
+                          {createdLabel} · {slip.total_odd.toFixed(2)} Oran · {slip.stake} ₺
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onDeleteSavedSlip(slip.id)}
+                        className="p-2 rounded-xl bg-[#0B0F17] border border-white/10 text-slate-400 hover:text-rose-400"
+                        aria-label="Kayıtlı kuponu sil"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {trackedLoading && (
+                      <p className="text-[10px] text-slate-500">Canlı skorlar kontrol ediliyor...</p>
+                    )}
+
+                    <div className="space-y-1.5">
+                      {slip.items.map((leg, i) => {
+                        const live = leg.prediction_id ? trackedStatuses[leg.prediction_id] : undefined;
+                        const st = live?.status || "PENDING";
+                        const score =
+                          live && live.home_score !== null && live.away_score !== null
+                            ? `${live.home_score}-${live.away_score}`
+                            : null;
+                        return (
+                          <div
+                            key={`${slip.id}-${leg.match_id}-${i}`}
+                            className="flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl bg-[#05080D]/75 border border-white/10 text-xs"
+                          >
+                            <div className="min-w-0">
+                              <p className="text-slate-200 font-semibold truncate">
+                                {leg.home_team} - {leg.away_team}
+                              </p>
+                              <p className="text-[10px] text-emerald-400 font-bold">
+                                {formatMarketLabel(leg.market_key, leg.selection_key)} @ {leg.iddaa_odd.toFixed(2)}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0 mono-nums">
+                              {score && (
+                                <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-200 text-[10px] font-bold">
+                                  {score}
+                                </span>
+                              )}
+                              <span
+                                className={`text-[10px] font-extrabold ${
+                                  st === "WON"
+                                    ? "text-[#00FF85]"
+                                    : st === "LOST"
+                                    ? "text-rose-400"
+                                    : st === "VOID"
+                                    ? "text-slate-400"
+                                    : "text-amber-300"
+                                }`}
+                              >
+                                {st === "WON" ? "TUTTU" : st === "LOST" ? "YATTI" : st === "VOID" ? "İADE" : "BEKLİYOR"}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Custom User Slip */}
       {subTab === "active" && slipItems.length > 0 && (
@@ -163,7 +352,15 @@ export function CouponsPage({
                 </span>
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={onSaveSlip}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/35 text-[#00FF85] text-xs font-bold hover:bg-emerald-500/25"
+              >
+                <BookmarkPlus className="w-3.5 h-3.5" />
+                Kuponu Takibe Al
+              </button>
               <button
                 onClick={openCustomShare}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#00FF85] hover:bg-emerald-400 text-[#05080D] text-xs font-bold shadow-[0_0_16px_-4px_rgba(0,255,133,0.6)]"

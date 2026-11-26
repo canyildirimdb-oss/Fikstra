@@ -4,6 +4,7 @@ import {
   BarChart3,
   Bell,
   BellRing,
+  BookmarkPlus,
   ChevronRight,
   Download,
   Flame,
@@ -18,6 +19,7 @@ import {
 } from "lucide-react";
 import { api } from "./api/client";
 import { formatMarketLabel } from "./utils/format";
+import { ControlPanel } from "./components/ControlPanel";
 import { CouponShareModal } from "./components/CouponShareModal";
 import { MatchDetailDrawer } from "./components/MatchDetailDrawer";
 import { StakeCalculator } from "./components/StakeCalculator";
@@ -25,7 +27,7 @@ import type { ShareCouponPayload } from "./utils/couponShare";
 import { CouponsPage } from "./pages/CouponsPage";
 import { HighlightsPage } from "./pages/HighlightsPage";
 import { PerformancePage } from "./pages/PerformancePage";
-import type { CustomSlipItem, DashboardSummary } from "./types";
+import type { CustomSlipItem, DashboardSummary, SavedSlip } from "./types";
 
 type TabKey = "highlights" | "coupons" | "performance";
 
@@ -40,6 +42,14 @@ const TELEGRAM_INVITE_URL =
 
 const STAKE_STORAGE_KEY = "fikstra_slip_stake";
 const PWA_DISMISS_KEY = "fikstra_pwa_dismissed";
+const SAVED_SLIPS_KEY = "fikstra_saved_slips_v1";
+
+function isControlPath(): boolean {
+  const path = window.location.pathname.toLowerCase();
+  if (path === "/kontrol" || path === "/kontrol/") return true;
+  const params = new URLSearchParams(window.location.search);
+  return params.get("kontrol") === "1";
+}
 
 function parseInitialUrl(): { tab: TabKey; matchId: number | null } {
   const path = window.location.pathname.toLowerCase();
@@ -100,6 +110,17 @@ export function App() {
       return Number.isFinite(saved) && saved > 0 ? saved : 100;
     } catch {
       return 100;
+    }
+  });
+  const [controlMode] = useState<boolean>(() => isControlPath());
+  const [savedSlips, setSavedSlips] = useState<SavedSlip[]>(() => {
+    try {
+      const raw = localStorage.getItem(SAVED_SLIPS_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.slice(0, 20) : [];
+    } catch {
+      return [];
     }
   });
   const [howItWorksOpen, setHowItWorksOpen] = useState(false);
@@ -193,6 +214,7 @@ export function App() {
 
   // Keep URL query params clean (?tab= & ?match=) without breaking drawer popstate
   useEffect(() => {
+    if (controlMode) return;
     const path = window.location.pathname.toLowerCase();
     if (path === "/bulten" || path === "/bulletin") {
       window.history.replaceState(window.history.state, "", "/");
@@ -345,6 +367,32 @@ export function App() {
     }
   };
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(SAVED_SLIPS_KEY, JSON.stringify(savedSlips.slice(0, 20)));
+    } catch {
+      // ignore storage quota errors
+    }
+  }, [savedSlips]);
+
+  const handleSaveSlip = useCallback(() => {
+    if (slipItems.length === 0) return;
+    const totalOdd = Number(slipItems.reduce((acc, x) => acc * x.iddaa_odd, 1).toFixed(2));
+    const entry: SavedSlip = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      created_at: new Date().toISOString(),
+      total_odd: totalOdd,
+      stake,
+      items: slipItems,
+    };
+    setSavedSlips((prev) => [entry, ...prev].slice(0, 20));
+    showToast("Kupon takibe alındı (Kuponlar → Takip Ettiklerim)");
+  }, [slipItems, stake, showToast]);
+
+  const handleDeleteSavedSlip = useCallback((slipId: string) => {
+    setSavedSlips((prev) => prev.filter((s) => s.id !== slipId));
+  }, []);
+
   const customTotalOdd = slipItems.reduce((acc, x) => acc * x.iddaa_odd, 1);
 
   const openSlipShare = () => {
@@ -368,6 +416,16 @@ export function App() {
       textPayload,
     });
   };
+
+  if (controlMode) {
+    return (
+      <ControlPanel
+        onExit={() => {
+          window.location.href = "/";
+        }}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen text-slate-100 pb-[calc(8.5rem+env(safe-area-inset-bottom))] md:pb-16">
@@ -560,6 +618,9 @@ export function App() {
             onClearSlip={handleClearSlip}
             onImportSlip={handleImportSlip}
             onSelectMatch={(matchId, couponPick) => setSelectedMatch({ matchId, couponPick })}
+            savedSlips={savedSlips}
+            onSaveSlip={handleSaveSlip}
+            onDeleteSavedSlip={handleDeleteSavedSlip}
             refreshTrigger={refreshTrigger}
           />
         )}
@@ -630,6 +691,14 @@ export function App() {
                 </p>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleSaveSlip}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/35 text-[#00FF85] text-xs font-bold hover:bg-emerald-500/25"
+                >
+                  <BookmarkPlus className="w-3.5 h-3.5" />
+                  Kuponu Takibe Al
+                </button>
                 <button
                   onClick={openSlipShare}
                   className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#00FF85] hover:bg-emerald-400 text-[#05080D] text-xs font-bold"
@@ -751,21 +820,32 @@ export function App() {
                 <button
                   type="button"
                   onClick={() => {
+                    handleSaveSlip();
+                    setSlipSheetOpen(false);
+                  }}
+                  className="px-3 py-3 rounded-xl bg-emerald-500/15 border border-emerald-500/35 text-[#00FF85] text-xs font-bold inline-flex items-center gap-1"
+                >
+                  <BookmarkPlus className="w-4 h-4" />
+                  Takibe Al
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
                     setSlipSheetOpen(false);
                     openSlipShare();
                   }}
                   className="flex-1 inline-flex items-center justify-center gap-1.5 py-3 rounded-xl bg-[#00FF85] text-[#05080D] text-xs font-extrabold"
                 >
                   <Share2 className="w-4 h-4" />
-                  Kuponu Paylaş
+                  Paylaş
                 </button>
                 <button
                   type="button"
                   onClick={handleClearSlip}
-                  className="px-4 py-3 rounded-xl bg-[#0B0F17] border border-white/10 text-slate-300 hover:text-rose-400 text-xs font-bold inline-flex items-center gap-1"
+                  className="px-3 py-3 rounded-xl bg-[#0B0F17] border border-white/10 text-slate-300 hover:text-rose-400 text-xs font-bold inline-flex items-center gap-1"
+                  aria-label="Temizle"
                 >
                   <Trash2 className="w-4 h-4" />
-                  Temizle
                 </button>
               </div>
             </motion.div>
