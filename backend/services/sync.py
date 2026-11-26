@@ -735,20 +735,21 @@ def refresh_all_active_forms(
     if team_tasks:
         from concurrent.futures import TimeoutError as FuturesTimeoutError, as_completed
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            future_map = {pool.submit(_fetch_team, item): item[0] for item in team_tasks.items()}
-            try:
-                for fut in as_completed(future_map, timeout=45.0):
-                    try:
-                        nk, res = fut.result()
-                    except Exception:
-                        continue
-                    results_by_norm[nk] = res
-                    if res.get("recent_matches"):
-                        set_cached_json(db, f"global_team_recent:v4:{nk}", res)
-            except FuturesTimeoutError:
-                for fut in future_map:
-                    fut.cancel()
+        pool = ThreadPoolExecutor(max_workers=8)
+        future_map = {pool.submit(_fetch_team, item): item[0] for item in team_tasks.items()}
+        try:
+            for fut in as_completed(future_map, timeout=35.0):
+                try:
+                    nk, res = fut.result()
+                except Exception:
+                    continue
+                results_by_norm[nk] = res
+                if res.get("recent_matches"):
+                    set_cached_json(db, f"global_team_recent:v4:{nk}", res)
+        except FuturesTimeoutError:
+            pass
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     source_breakdown: dict[str, int] = {}
     covered_teams: set[str] = set()
