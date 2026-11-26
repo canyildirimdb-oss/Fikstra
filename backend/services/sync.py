@@ -558,9 +558,10 @@ def run_sync_pipeline(
         db.commit()
 
         try:
-            from app.telegram_bot import dispatch_telegram_settlements, dispatch_telegram_updates
+            from app.telegram_bot import check_and_send_health_alerts, dispatch_telegram_settlements, dispatch_telegram_updates
             dispatch_telegram_updates(db)
             dispatch_telegram_settlements(db)
+            check_and_send_health_alerts(db)
         except Exception:
             pass
 
@@ -589,6 +590,11 @@ def run_sync_pipeline(
         log.finished_at = datetime.now(timezone.utc)
         log.message = str(exc)[:500]
         db.commit()
+        try:
+            from app.telegram_bot import check_and_send_health_alerts
+            check_and_send_health_alerts(db)
+        except Exception:
+            pass
         raise
     finally:
         if db_locked:

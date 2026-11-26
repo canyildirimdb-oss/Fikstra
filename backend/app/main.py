@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,7 +20,14 @@ from app.config import settings
 from app.database import ensure_schema, get_db
 from app.models import Coupon, CouponItem, Match, Prediction, PushSubscription, ScraperCache, SyncLog
 from app.routers.api import clear_api_cache, router as api_router
-from app.telegram_bot import discover_telegram_topics, dispatch_telegram_settlements, send_telegram_test_messages
+from app.telegram_bot import (
+    check_and_send_health_alerts,
+    discover_telegram_topics,
+    dispatch_telegram_settlements,
+    handle_telegram_webhook,
+    send_telegram_test_messages,
+    setup_telegram_webhook,
+)
 from services.settlement import settle_coupons, settle_finished_matches
 from services.sync import is_sync_running, run_sync_pipeline
 
@@ -192,6 +199,7 @@ def trigger_cron_settle(
 
         try:
             dispatch_telegram_settlements(db)
+            check_and_send_health_alerts(db)
         except Exception:
             pass
 
@@ -289,6 +297,31 @@ def admin_telegram_discover(x_cron_secret: Optional[str] = Header(default=None))
 def admin_telegram_test(x_cron_secret: Optional[str] = Header(default=None)):
     _verify_cron_secret(x_cron_secret)
     return send_telegram_test_messages()
+
+
+@app.post("/api/admin/telegram/setup-webhook")
+def admin_telegram_setup_webhook(x_cron_secret: Optional[str] = Header(default=None)):
+    _verify_cron_secret(x_cron_secret)
+    return setup_telegram_webhook()
+
+
+@app.post("/api/telegram/webhook")
+async def telegram_webhook(
+    request: Request,
+    x_telegram_bot_api_secret_token: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    secret = (settings.telegram_webhook_secret or "").strip()
+    if secret and not hmac.compare_digest(x_telegram_bot_api_secret_token or "", secret):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid Telegram webhook secret",
+        )
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"ok": True, "ignored": True}
+    return handle_telegram_webhook(payload, db)
 
 
 # Serve built frontend (single-service production mode) if dist/ exists

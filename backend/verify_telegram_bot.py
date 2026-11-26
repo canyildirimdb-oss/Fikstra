@@ -6,14 +6,17 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import httpx
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 from app.config import settings
-from app.database import Base
-from app.models import Coupon, CouponItem, Match, Prediction, TelegramDispatch
+from app.database import Base, get_db
+from app.main import app as fastapi_app
+from app.models import Coupon, CouponItem, Match, Prediction, ScraperCache, SyncLog, TelegramDispatch
 from app import telegram_bot
 
 
@@ -338,8 +341,332 @@ def test_tg3_failsafe_offline():
     print("TEST_TG3_FAILSAFE_OFFLINE: PASS")
 
 
+def test_tg4_deep_links():
+    db = _make_session()
+    now = datetime.now(timezone.utc)
+    m = Match(
+        iddaa_id="tg_dl1",
+        league="Süper Lig",
+        home_team="Galatasaray",
+        away_team="Fenerbahçe",
+        start_time_utc=now + timedelta(hours=3),
+        status="SCHEDULED",
+    )
+    db.add(m)
+    db.flush()
+    p = Prediction(
+        match_id=m.id,
+        market_key="MS",
+        selection_key="1",
+        iddaa_odd=2.05,
+        published_odd=2.05,
+        confidence_score=75.0,
+        published_confidence=75.0,
+        is_top_pick=True,
+        odds_drop_pct=9.0,
+        status="PENDING",
+    )
+    db.add(p)
+    db.flush()
+    c = Coupon(
+        coupon_date=now.astimezone(telegram_bot.TR_TZ).date().isoformat(),
+        tier="BANKO",
+        total_odd=2.05,
+        avg_confidence=75.0,
+        status="PENDING",
+        is_locked=False,
+    )
+    db.add(c)
+    db.flush()
+    db.add(CouponItem(coupon_id=c.id, prediction_id=p.id, odd_at_pick=2.05))
+    db.commit()
+
+    _, c_markup = telegram_bot._render_coupon_message(c)
+    _, s_markup = telegram_bot._render_single_message(p)
+    _, v_markup = telegram_bot._render_value_message(p)
+
+    base = telegram_bot._public_url()
+    assert c_markup["inline_keyboard"][0][0]["url"] == f"{base}/?tab=coupons"
+    assert s_markup["inline_keyboard"][0][0]["url"] == f"{base}/?match={p.id}"
+    assert v_markup["inline_keyboard"][0][0]["url"] == f"{base}/?match={p.id}"
+
+    # Verify daily report button uses /?tab=performance
+    now_tr = datetime(2026, 11, 26, 2, 0, tzinfo=telegram_bot.TR_TZ)
+    now_utc = now_tr.astimezone(timezone.utc)
+    y_utc = (now_tr - timedelta(days=1)).replace(hour=18, minute=0).astimezone(timezone.utc)
+    m_y = Match(
+        iddaa_id="tg_dl_y",
+        league="Süper Lig",
+        home_team="Beşiktaş",
+        away_team="Trabzonspor",
+        start_time_utc=y_utc,
+        status="FINISHED",
+        home_score=1,
+        away_score=0,
+    )
+    db.add(m_y)
+    db.flush()
+    db.add(Prediction(
+        match_id=m_y.id, market_key="MS", selection_key="1",
+        iddaa_odd=1.85, published_odd=1.85, confidence_score=72.0, published_confidence=72.0,
+        is_top_pick=True, status="WON",
+    ))
+    db.commit()
+
+    sent_payloads = []
+    def fake_post(self, url, json=None):
+        sent_payloads.append(json)
+        return _FakeResponse(200, {"ok": True, "result": {"message_id": 910}})
+
+    class _FakeDt(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now_utc if tz else now_utc.replace(tzinfo=None)
+
+    with patch.object(settings, "telegram_bot_token", "fake-token"), \
+         patch.object(settings, "telegram_chat_id", "-100123456"), \
+         patch.object(settings, "telegram_topic_results", "14"), \
+         patch("app.telegram_bot.datetime", _FakeDt), \
+         patch("httpx.Client.post", new=fake_post), \
+         patch("app.telegram_bot.time.sleep"):
+        res = telegram_bot.dispatch_telegram_settlements(db)
+        assert res["daily_report"] is True
+        assert any(
+            p_item.get("reply_markup", {}).get("inline_keyboard", [[{}]])[0][0].get("url") == f"{base}/?tab=performance"
+            for p_item in sent_payloads
+        )
+
+    print("TEST_TG4_DEEP_LINKS: PASS")
+
+
+def test_tg5_weekly_report():
+    db = _make_session()
+    # Monday 2026-11-30 09:30 TR -> ISO week 2026-W49
+    mon_tr = datetime(2026, 11, 30, 9, 30, tzinfo=telegram_bot.TR_TZ)
+    mon_utc = mon_tr.astimezone(timezone.utc)
+
+    # 3 matches in Premier League (last 7 days: Nov 24-28)
+    for idx, (st, odd) in enumerate([("WON", 2.40), ("WON", 1.80), ("LOST", 1.70)]):
+        mt = Match(
+            iddaa_id=f"tg_w_{idx}",
+            league="Premier League",
+            home_team=f"Home{idx}",
+            away_team=f"Away{idx}",
+            start_time_utc=(mon_tr - timedelta(days=2 + idx)).replace(hour=18, minute=0).astimezone(timezone.utc),
+            status="FINISHED",
+            home_score=2 if st == "WON" else 0,
+            away_score=1,
+        )
+        db.add(mt)
+        db.flush()
+        db.add(Prediction(
+            match_id=mt.id, market_key="MS", selection_key="1",
+            iddaa_odd=odd, published_odd=odd, confidence_score=70.0, published_confidence=70.0,
+            is_top_pick=True, status=st,
+        ))
+
+    # Add settled coupon in last week
+    c = Coupon(
+        coupon_date=(mon_tr - timedelta(days=2)).date().isoformat(),
+        tier="BANKO", total_odd=2.40, avg_confidence=70.0, status="WON", is_locked=True,
+    )
+    db.add(c)
+    db.commit()
+
+    calls = []
+    def fake_post(self, url, json=None):
+        calls.append(json)
+        return _FakeResponse(200, {"ok": True, "result": {"message_id": 920}})
+
+    class _FakeMonDt(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return mon_utc if tz else mon_utc.replace(tzinfo=None)
+
+    with patch.object(settings, "telegram_bot_token", "fake-token"), \
+         patch.object(settings, "telegram_chat_id", "-100123456"), \
+         patch.object(settings, "telegram_topic_results", "14"), \
+         patch("app.telegram_bot.datetime", _FakeMonDt), \
+         patch("httpx.Client.post", new=fake_post), \
+         patch("app.telegram_bot.time.sleep"):
+        res1 = telegram_bot.dispatch_telegram_settlements(db)
+        assert res1["weekly_report"] is True
+        weekly_msgs = [x for x in calls if "HAFTANIN ŞEFFAF BİLANÇOSU" in x.get("text", "")]
+        assert len(weekly_msgs) == 1
+        txt = weekly_msgs[0]["text"]
+        assert "2026-W49" in txt
+        assert "Az veri" in txt  # only 3 decided (<5), no fake percentage!
+        assert "2.40" in txt
+        assert "Premier League" in txt
+        assert "1/1" in txt
+        assert weekly_msgs[0]["reply_markup"]["inline_keyboard"][0][0]["url"].endswith("/?tab=performance")
+
+        # Idempotent re-run must NOT send weekly report again
+        calls.clear()
+        res2 = telegram_bot.dispatch_telegram_settlements(db)
+        assert res2["weekly_report"] is False
+        assert not any("HAFTANIN ŞEFFAF BİLANÇOSU" in x.get("text", "") for x in calls)
+
+    print("TEST_TG5_WEEKLY_REPORT: PASS")
+
+
+def test_tg6_watchdog_cooldown():
+    db = _make_session()
+    now_utc = datetime.now(timezone.utc)
+
+    # Seed low credit + 5 VOIDs in last 24h
+    db.add(ScraperCache(cache_key="odds_api:remaining_credits", payload_json='{"remaining": 30, "used": 470}'))
+    for i in range(5):
+        mt = Match(
+            iddaa_id=f"tg_void_{i}", league="Serie A", home_team=f"VH{i}", away_team=f"VA{i}",
+            start_time_utc=now_utc - timedelta(hours=3), status="VOID",
+        )
+        db.add(mt)
+        db.flush()
+        db.add(Prediction(
+            match_id=mt.id, market_key="MS", selection_key="1",
+            iddaa_odd=1.90, confidence_score=65.0, status="VOID", settled_at=now_utc - timedelta(hours=1),
+        ))
+    db.commit()
+
+    calls = []
+    def fake_post(self, url, json=None):
+        calls.append(json)
+        return _FakeResponse(200, {"ok": True, "result": {"message_id": 930 + len(calls)}})
+
+    with patch.object(settings, "telegram_bot_token", "fake-token"), \
+         patch.object(settings, "telegram_admin_chat_id", "999888777"), \
+         patch.object(settings, "telegram_low_credit_threshold", 50), \
+         patch("httpx.Client.post", new=fake_post), \
+         patch("app.telegram_bot.time.sleep"):
+        res1 = telegram_bot.check_and_send_health_alerts(db)
+        assert set(res1["alerts_sent"]) == {"low_credit", "high_void"}
+        assert all(c["chat_id"] == "999888777" and "message_thread_id" not in c for c in calls)
+
+        # Second run same day -> cooldown blocks duplicates
+        calls.clear()
+        res2 = telegram_bot.check_and_send_health_alerts(db)
+        assert res2["alerts_sent"] == []
+        assert len(calls) == 0
+
+    # Network error must never raise
+    def fake_err(self, url, json=None):
+        raise httpx.ConnectError("offline")
+
+    db.add(SyncLog(status="ERROR", message="Simulated failure"))
+    db.commit()
+    with patch.object(settings, "telegram_bot_token", "fake-token"), \
+         patch.object(settings, "telegram_admin_chat_id", "999888777"), \
+         patch("httpx.Client.post", new=fake_err):
+        res3 = telegram_bot.check_and_send_health_alerts(db)
+        assert res3["enabled"] is True
+
+    print("TEST_TG6_WATCHDOG_COOLDOWN: PASS")
+
+
+def test_tg7_webhook_commands():
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    TestingSession = sessionmaker(bind=engine)
+    db = TestingSession()
+
+    now = datetime.now(timezone.utc)
+    mt = Match(
+        iddaa_id="tg_wh_1", league="La Liga", home_team="Barcelona", away_team="Valencia",
+        start_time_utc=now + timedelta(hours=3), status="SCHEDULED",
+    )
+    db.add(mt)
+    db.flush()
+    p = Prediction(
+        match_id=mt.id, market_key="MS", selection_key="1",
+        iddaa_odd=1.55, published_odd=1.55, confidence_score=81.0, published_confidence=81.0,
+        is_top_pick=True, status="PENDING",
+    )
+    db.add(p)
+    db.flush()
+    c = Coupon(
+        coupon_date=now.astimezone(telegram_bot.TR_TZ).date().isoformat(),
+        tier="BANKO", total_odd=1.55, avg_confidence=81.0, status="PENDING", is_locked=False,
+    )
+    db.add(c)
+    db.flush()
+    db.add(CouponItem(coupon_id=c.id, prediction_id=p.id, odd_at_pick=1.55))
+    db.commit()
+
+    def override_get_db():
+        try:
+            yield db
+        finally:
+            pass
+
+    fastapi_app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(fastapi_app)
+
+    calls = []
+    orig_post = httpx.Client.post
+
+    def fake_post(self, url, *args, **kwargs):
+        if "api.telegram.org" not in str(url):
+            return orig_post(self, url, *args, **kwargs)
+        calls.append(kwargs.get("json"))
+        return _FakeResponse(200, {"ok": True, "result": {"message_id": 950 + len(calls)}})
+
+    try:
+        with patch.object(settings, "telegram_bot_token", "fake-token"), \
+             patch.object(settings, "telegram_webhook_secret", "super-secret-wh"), \
+             patch("httpx.Client.post", new=fake_post), \
+             patch("app.telegram_bot.time.sleep"):
+
+            # 1. Wrong secret -> 403
+            r_bad = client.post(
+                "/api/telegram/webhook",
+                json={"message": {"chat": {"id": 111, "type": "private"}, "text": "/bugun"}},
+                headers={"X-Telegram-Bot-Api-Secret-Token": "wrong"},
+            )
+            assert r_bad.status_code == 403
+
+            # 2. Group / topic message -> ignored with 200 OK and 0 sends
+            r_grp = client.post(
+                "/api/telegram/webhook",
+                json={"message": {"chat": {"id": -100123, "type": "supergroup"}, "message_thread_id": 11, "text": "/bugun"}},
+                headers={"X-Telegram-Bot-Api-Secret-Token": "super-secret-wh"},
+            )
+            assert r_grp.status_code == 200
+            assert r_grp.json().get("ignored") is True
+            assert len(calls) == 0
+
+            # 3. Private /bugun, /kuponlar, /karne
+            for cmd in ["/bugun", "/kuponlar", "/karne"]:
+                r_ok = client.post(
+                    "/api/telegram/webhook",
+                    json={"message": {"chat": {"id": 555111, "type": "private"}, "text": cmd}},
+                    headers={"X-Telegram-Bot-Api-Secret-Token": "super-secret-wh"},
+                )
+                assert r_ok.status_code == 200
+                assert r_ok.json().get("command") == cmd
+
+            assert len(calls) == 3
+            assert "Barcelona - Valencia" in calls[0]["text"]
+            assert f"/?match={p.id}" in calls[0]["text"]
+            assert "BANKO KUPON" in calls[1]["text"]
+            assert "KARNE" in calls[2]["text"]
+    finally:
+        fastapi_app.dependency_overrides.clear()
+        db.close()
+
+    print("TEST_TG7_WEBHOOK_COMMANDS: PASS")
+
+
 if __name__ == "__main__":
     test_tg1_idempotent_no_spam()
     test_tg2_settle_reply_and_daily_report()
     test_tg3_failsafe_offline()
+    test_tg4_deep_links()
+    test_tg5_weekly_report()
+    test_tg6_watchdog_cooldown()
+    test_tg7_webhook_commands()
     print("ALL_TELEGRAM_TESTS: PASS")

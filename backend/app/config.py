@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     telegram_single_min_conf: float = 70.0
     telegram_single_daily_cap: int = 6
     telegram_value_daily_cap: int = 4
+    telegram_admin_chat_id: str = ""
+    telegram_webhook_secret: str = ""
+    telegram_low_credit_threshold: int = 50
 
     model_config = SettingsConfigDict(
         env_file=".env",
