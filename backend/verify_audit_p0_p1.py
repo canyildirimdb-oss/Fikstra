@@ -174,7 +174,7 @@ def test_transparency_lifecycle():
         clear_api_cache()
         fastapi_app.dependency_overrides[get_db] = lambda: db
         client = TestClient(fastapi_app)
-        res = client.get("/api/predictions?today_only=true&major_only=true&min_confidence=60").json()
+        res = client.get("/api/predictions?today_only=false&major_only=true&min_confidence=60").json()
         by_mid = {it["match_id"]: it for it in res["items"]}
         assert m2.id in by_mid, "Locked 68->55 pick must stay in Analizler"
         assert by_mid[m2.id]["confidence_score"] == 68.0
@@ -443,6 +443,169 @@ def test_admin_auto_settle_order():
         engine.dispose()
 
 
+def test_hero_and_sort_parity():
+    db, engine = _make_memory_session()
+    try:
+        now = datetime.now(timezone.utc)
+        # m_low has high live confidence (85) but locked published_confidence (67) -> effective = 67
+        # m_high has lower live confidence (79) but locked published_confidence (81) -> effective = 81
+        m_low = Match(
+            iddaa_id="sort_m_low",
+            league="UEFA Avrupa Ligi",
+            country="Avrupa",
+            home_team="Hoffenheim",
+            away_team="Sturm Graz",
+            start_time_utc=now + timedelta(minutes=30),
+            status="SCHEDULED",
+            is_major_league=True,
+        )
+        m_high = Match(
+            iddaa_id="sort_m_high",
+            league="UEFA Avrupa Ligi",
+            country="Avrupa",
+            home_team="Fenerbahçe",
+            away_team="Ajax",
+            start_time_utc=now + timedelta(minutes=45),
+            status="SCHEDULED",
+            is_major_league=True,
+        )
+        db.add_all([m_low, m_high])
+        db.flush()
+
+        p_low = Prediction(
+            match_id=m_low.id,
+            market_key="MS",
+            selection_key="1",
+            iddaa_odd=1.70,
+            confidence_score=85.0,
+            published_odd=1.68,
+            published_confidence=67.0,
+            published_at=now - timedelta(hours=2),
+            is_top_pick=True,
+            status="PENDING",
+            score_breakdown_json="{}",
+        )
+        p_high = Prediction(
+            match_id=m_high.id,
+            market_key="AU_25",
+            selection_key="UST",
+            iddaa_odd=1.75,
+            confidence_score=79.0,
+            published_odd=1.75,
+            published_confidence=81.0,
+            published_at=now - timedelta(hours=2),
+            is_top_pick=True,
+            status="PENDING",
+            score_breakdown_json="{}",
+        )
+        db.add_all([p_low, p_high])
+        db.commit()
+
+        clear_api_cache()
+        fastapi_app.dependency_overrides[get_db] = lambda: db
+        client = TestClient(fastapi_app)
+        res = client.get("/api/predictions?today_only=false&major_only=true&min_confidence=60").json()
+        items = res["items"]
+        assert len(items) == 2
+        assert items[0]["match_id"] == m_high.id, f"Expected highest effective confidence (81) first, got {items[0]}"
+        assert items[0]["confidence_score"] == 81.0
+        assert items[1]["confidence_score"] == 67.0
+        assert items[0]["confidence_score"] >= items[1]["confidence_score"]
+        print("TEST_HERO_AND_SORT_PARITY: PASS")
+    finally:
+        fastapi_app.dependency_overrides.clear()
+        db.close()
+        engine.dispose()
+
+
+def test_today_filter_tr_day_only():
+    from utils.time_utils import TR_TZ
+    db, engine = _make_memory_session()
+    try:
+        # Compute deterministic today vs tomorrow in Europe/Istanbul
+        now_tr = datetime.now(TR_TZ)
+        today_mid_tr = now_tr + timedelta(minutes=20)
+        # If very close to midnight in TR, tomorrow is +2 hours; otherwise +24h/next day 14:00 TR
+        tomorrow_tr = (now_tr + timedelta(days=1)).replace(hour=14, minute=0, second=0, microsecond=0)
+        if today_mid_tr.strftime("%Y-%m-%d") != now_tr.strftime("%Y-%m-%d"):
+            # Fallback just in case test runs in last 20 mins of TR day: still verify tomorrow_tr is excluded
+            today_match_utc = None
+        else:
+            today_match_utc = today_mid_tr.astimezone(timezone.utc)
+        tomorrow_match_utc = tomorrow_tr.astimezone(timezone.utc)
+
+        m_tomorrow = Match(
+            iddaa_id="tr_tomorrow_m",
+            league="Süper Lig",
+            country="Türkiye",
+            home_team="Tomorrow Home",
+            away_team="Tomorrow Away",
+            start_time_utc=tomorrow_match_utc,
+            status="SCHEDULED",
+            is_major_league=True,
+        )
+        db.add(m_tomorrow)
+        db.flush()
+        db.add(
+            Prediction(
+                match_id=m_tomorrow.id,
+                market_key="MS",
+                selection_key="1",
+                iddaa_odd=1.80,
+                confidence_score=76.0,
+                is_top_pick=True,
+                status="PENDING",
+                score_breakdown_json="{}",
+            )
+        )
+
+        m_today = None
+        if today_match_utc is not None:
+            m_today = Match(
+                iddaa_id="tr_today_m",
+                league="Süper Lig",
+                country="Türkiye",
+                home_team="Today Home",
+                away_team="Today Away",
+                start_time_utc=today_match_utc,
+                status="SCHEDULED",
+                is_major_league=True,
+            )
+            db.add(m_today)
+            db.flush()
+            db.add(
+                Prediction(
+                    match_id=m_today.id,
+                    market_key="MS",
+                    selection_key="1",
+                    iddaa_odd=1.85,
+                    confidence_score=74.0,
+                    is_top_pick=True,
+                    status="PENDING",
+                    score_breakdown_json="{}",
+                )
+            )
+        db.commit()
+
+        clear_api_cache()
+        fastapi_app.dependency_overrides[get_db] = lambda: db
+        client = TestClient(fastapi_app)
+        res_today = client.get("/api/predictions?today_only=true&major_only=true&min_confidence=60").json()
+        today_ids = {it["match_id"] for it in res_today["items"]}
+        assert m_tomorrow.id not in today_ids, f"Tomorrow TR match leaked into today_only=true! {today_ids}"
+        if m_today is not None:
+            assert m_today.id in today_ids, f"Today TR match missing from today_only=true! {today_ids}"
+
+        res_all = client.get("/api/predictions?today_only=false&major_only=true&min_confidence=60").json()
+        all_ids = {it["match_id"] for it in res_all["items"]}
+        assert m_tomorrow.id in all_ids, "Tomorrow TR match should appear when today_only=false"
+        print("TEST_TODAY_FILTER_TR_DAY_ONLY: PASS")
+    finally:
+        fastapi_app.dependency_overrides.clear()
+        db.close()
+        engine.dispose()
+
+
 if __name__ == "__main__":
     test_tg_match_id_and_au25()
     test_transparency_lifecycle()
@@ -450,4 +613,6 @@ if __name__ == "__main__":
     test_sync_dup_odds_and_elo()
     test_aet_00_and_void_alert()
     test_admin_auto_settle_order()
+    test_hero_and_sort_parity()
+    test_today_filter_tr_day_only()
     print("ALL_AUDIT_P0_P1_TESTS: PASS")

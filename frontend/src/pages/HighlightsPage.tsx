@@ -168,12 +168,16 @@ export function HighlightsPage({
 
   const heroItem = useMemo(() => {
     if (items.length === 0) return null;
-    if (summary?.top_confidence) {
-      const matched = items.find((i) => i.match_id === summary.top_confidence!.match_id);
-      if (matched) return matched;
-    }
-    return items[0];
-  }, [items, summary?.top_confidence]);
+    return items.reduce(
+      (best, cur) => (cur.confidence_score > best.confidence_score ? cur : best),
+      items[0]
+    );
+  }, [items]);
+
+  const gridItems = useMemo(
+    () => (heroItem ? items.filter((i) => i.prediction_id !== heroItem.prediction_id) : items),
+    [items, heroItem]
+  );
 
   const heroReasons = useMemo(() => (heroItem ? getTopReasonChips(heroItem) : []), [heroItem]);
 
@@ -270,7 +274,7 @@ export function HighlightsPage({
   return (
     <div className="space-y-3.5">
       {/* Full-Width Hero Card: Günün En Güvenli Maçı */}
-      {(heroItem || summary?.top_confidence) && (
+      {heroItem && (
         <button
           type="button"
           onClick={() => {
@@ -524,15 +528,28 @@ export function HighlightsPage({
       ) : items.length === 0 ? (
         <div className="p-8 text-center rounded-2xl glass-card">
           <p className="text-sm font-semibold text-slate-200">
-            Seçili filtrelere uygun maç bulunamadı
+            {todayOnly && !search.trim()
+              ? "Bugün için yaklaşan maç kalmadı"
+              : "Seçili filtrelere uygun maç bulunamadı"}
           </p>
           <p className="text-xs text-slate-400 mt-1">
-            "Tümü" sekmesini veya farklı bir arama terimini deneyebilirsiniz.
+            {todayOnly && !search.trim()
+              ? "Yarının ve haftanın diğer maçlarını görmek için tüm listeye geçebilirsiniz."
+              : "\"Tümü\" sekmesini veya farklı bir arama terimini deneyebilirsiniz."}
           </p>
+          {todayOnly && (
+            <button
+              type="button"
+              onClick={() => setTodayOnly(false)}
+              className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#00FF85] text-[#05080D] text-xs font-extrabold hover:brightness-110 transition-all"
+            >
+              Tüm Maçları Gör
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {items.map((item, idx) => {
+          {gridItems.map((item, idx) => {
             const inSlip = slipIds.has(`${item.match_id}_${item.market_key}_${item.selection_key}`);
             const isElite = item.confidence_score >= 80;
 

@@ -36,7 +36,7 @@ from services.ai_summary import generate_match_summary
 from services.analyzer import MAX_HIGHLIGHT_ODD, MIN_ODD_RULE
 from services.sync import is_sync_running, run_sync_pipeline
 from utils.formatting import format_pick_tr
-from utils.time_utils import is_tr_today_or_next_24h, to_tr_datetime, tr_now, tr_today_str
+from utils.time_utils import is_tr_same_day, is_tr_today_or_next_24h, to_tr_datetime, tr_now, tr_today_str
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -263,6 +263,8 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
     win_rate = round((won_cnt / len(settled_preds)) * 100.0, 1) if settled_preds else None
 
     kickoff_lock = datetime.now(timezone.utc) + timedelta(minutes=5)
+    eff_conf_expr = func.coalesce(Prediction.published_confidence, Prediction.confidence_score)
+    eff_odd_expr = func.coalesce(Prediction.published_odd, Prediction.iddaa_odd)
     pending = (
         db.query(Prediction)
         .options(joinedload(Prediction.match))
@@ -270,17 +272,21 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
         .filter(
             Match.status == "SCHEDULED",
             Match.start_time_utc > kickoff_lock,
+            Match.is_major_league.is_(True),
             Prediction.status == "PENDING",
-            Prediction.iddaa_odd >= MIN_ODD_RULE,
+            Prediction.is_top_pick.is_(True),
+            eff_odd_expr >= MIN_ODD_RULE,
+            eff_odd_expr < MAX_HIGHLIGHT_ODD,
+            eff_conf_expr >= 60.0,
         )
         .all()
     )
-    today_pending = [p for p in pending if is_tr_today_or_next_24h(p.match.start_time_utc)]
+    today_pending = [p for p in pending if is_tr_same_day(p.match.start_time_utc)]
     pool = today_pending or pending
 
     top_conf = max(
-        [p for p in pool if p.iddaa_odd < MAX_HIGHLIGHT_ODD],
-        key=lambda p: p.confidence_score,
+        pool,
+        key=lambda p: p.published_confidence if p.published_confidence is not None else p.confidence_score,
         default=None,
     )
     best_value_pool = [
@@ -316,9 +322,9 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
             "league": p.match.league,
             "market_key": p.market_key,
             "selection_key": p.selection_key,
-            "iddaa_odd": p.iddaa_odd,
+            "iddaa_odd": p.published_odd if p.published_odd is not None else p.iddaa_odd,
             "global_odd": p.global_odd,
-            "confidence_score": p.confidence_score,
+            "confidence_score": p.published_confidence if p.published_confidence is not None else p.confidence_score,
             "value_edge_pct": p.value_edge_pct,
             "odds_drop_pct": p.odds_drop_pct,
         }
@@ -381,7 +387,7 @@ def get_predictions(
     if market and market != "ALL":
         q = q.filter(Prediction.market_key == market)
 
-    preds = q.order_by(Prediction.is_top_pick.desc(), eff_conf.desc()).all()
+    preds = q.order_by(eff_conf.desc(), Prediction.is_top_pick.desc()).all()
 
     search_low = (search or "").strip().lower()
     seen_matches: set[int] = set()
@@ -393,7 +399,7 @@ def get_predictions(
         m_start = m.start_time_utc.replace(tzinfo=timezone.utc) if m.start_time_utc.tzinfo is None else m.start_time_utc
         if m_start <= now_utc:
             continue
-        if today_only and not is_tr_today_or_next_24h(m.start_time_utc):
+        if today_only and not is_tr_same_day(m.start_time_utc):
             continue
         if search_low and (
             search_low not in m.home_team.lower()
@@ -454,6 +460,7 @@ def get_predictions(
             "injuries_count": len(ctx_data["injuries"]["home"]) + len(ctx_data["injuries"]["away"]),
         })
 
+    items.sort(key=lambda x: x["confidence_score"], reverse=True)
     return _cache_set(cache_key, {"count": len(items), "items": items})
 
 
