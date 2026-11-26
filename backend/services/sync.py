@@ -686,8 +686,9 @@ def refresh_all_active_forms(
             "elapsed_sec": 0.0,
         }
 
-    # Determine which teams need fetching
+    # Determine which teams need fetching (reuse 2h global_team_recent:v4 cache when not bypassed)
     team_tasks: dict[str, tuple[str, datetime, Optional[bool]]] = {}
+    cached_results: dict[str, dict[str, Any]] = {}
     for m in scheduled:
         if only_missing:
             existing_rm = get_cached_json(db, f"recent_v4:{m.id}", ttl_hours=6.0)
@@ -695,7 +696,14 @@ def refresh_all_active_forms(
                 continue
         for tname, pref_home in ((m.home_team, True), (m.away_team, False)):
             nk = normalize_team_name(tname)
-            if nk and nk not in team_tasks:
+            if not nk:
+                continue
+            if not force_refresh:
+                c_team = get_cached_json(db, f"global_team_recent:v4:{nk}", ttl_hours=2.0)
+                if isinstance(c_team, dict) and c_team.get("recent_matches"):
+                    cached_results[nk] = c_team
+                    continue
+            if nk not in team_tasks and nk not in cached_results:
                 team_tasks[nk] = (tname, m.start_time_utc, pref_home)
 
     if not team_tasks and only_missing:
@@ -717,18 +725,19 @@ def refresh_all_active_forms(
                 match_start_utc=dt_utc,
                 prefer_home=pref_home,
                 db=None,  # thread-safe: avoid sharing SQLAlchemy session across threads
-                timeout=5.5,
+                timeout=4.0,
             )
             return nk, res
         except Exception:
             return nk, {"form": [], "recent_matches": [], "goals_avg": None, "conceded_avg": None, "rest_days": None, "source": None}
 
-    results_by_norm: dict[str, dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        for nk, res in pool.map(_fetch_team, list(team_tasks.items())):
-            results_by_norm[nk] = res
-            if res.get("recent_matches"):
-                set_cached_json(db, f"global_team_recent:v4:{nk}", res)
+    results_by_norm: dict[str, dict[str, Any]] = dict(cached_results)
+    if team_tasks:
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for nk, res in pool.map(_fetch_team, list(team_tasks.items())):
+                results_by_norm[nk] = res
+                if res.get("recent_matches"):
+                    set_cached_json(db, f"global_team_recent:v4:{nk}", res)
 
     source_breakdown: dict[str, int] = {}
     covered_teams: set[str] = set()
