@@ -14,10 +14,10 @@ engine_kwargs: dict = {
     "pool_pre_ping": True,
 }
 if not is_sqlite:
-    engine_kwargs["pool_recycle"] = 300
+    engine_kwargs["pool_recycle"] = 240
     engine_kwargs["pool_size"] = 3
     engine_kwargs["max_overflow"] = 2
-    engine_kwargs["pool_timeout"] = 20
+    engine_kwargs["pool_timeout"] = 15
 
 engine = create_engine(db_url, **engine_kwargs)
 

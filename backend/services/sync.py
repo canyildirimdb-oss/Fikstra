@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models import Match, MatchContext, OddsCurrent, OddsHistory, Prediction, ScraperCache, SyncLog
+from app.models import Match, MatchContext, NotificationLog, OddsCurrent, OddsHistory, Prediction, ScraperCache, SyncLog
 from scrapers.clubelo import load_clubelo_ratings, lookup_clubelo
 from scrapers.external_data import (
     fetch_espn_events_for_dates,
@@ -587,9 +587,11 @@ def run_sync_pipeline(
 
         alerts = dispatch_sync_alerts(db, coupons)
 
-        # Neon 500MB DB quota protection: prune >30d odds_history & >14d expired scraper_cache
-        prune_odds_cutoff = now - timedelta(days=30)
-        db.query(OddsHistory).filter(OddsHistory.recorded_at < prune_odds_cutoff).delete(synchronize_session=False)
+        # Free-tier DB disk hygiene: prune >30d odds_history/sync_logs/notification_logs & >14d scraper_cache
+        prune_30d_cutoff = now - timedelta(days=30)
+        db.query(OddsHistory).filter(OddsHistory.recorded_at < prune_30d_cutoff).delete(synchronize_session=False)
+        db.query(SyncLog).filter(SyncLog.started_at < prune_30d_cutoff).delete(synchronize_session=False)
+        db.query(NotificationLog).filter(NotificationLog.sent_at < prune_30d_cutoff).delete(synchronize_session=False)
         prune_cache_cutoff = now - timedelta(days=14)
         db.query(ScraperCache).filter(
             ScraperCache.updated_at < prune_cache_cutoff,
