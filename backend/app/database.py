@@ -83,6 +83,18 @@ def ensure_schema():
         "coupon_items": [
             ("odd_at_pick", "FLOAT"),
         ],
+        "notification_logs": [
+            ("category", "VARCHAR(32) DEFAULT 'info'"),
+            ("url", "VARCHAR(256) DEFAULT '/'"),
+        ],
+        "sportoto_weeks": [
+            ("column_price", "FLOAT DEFAULT 10.0"),
+        ],
+        "sportoto_matches": [
+            ("public_pct_1", "FLOAT"),
+            ("public_pct_x", "FLOAT"),
+            ("public_pct_2", "FLOAT"),
+        ],
     }
 
     is_pg = engine.dialect.name == "postgresql"

@@ -3,6 +3,7 @@ import type {
   CouponData,
   DashboardSummary,
   MatchDetail,
+  NotificationItem,
   PerformanceBreakdown,
   PerformanceData,
   PredictionItem,
@@ -11,6 +12,7 @@ import type {
   SiteAnnouncement,
   SportotoCurrentResponse,
   SportotoHistoryItem,
+  SportotoPlan,
   SportotoWeekData,
 } from "../types";
 
@@ -161,12 +163,29 @@ export const api = {
   getSportotoHistory: () =>
     requestJson<{ items: SportotoHistoryItem[] }>("/api/sportoto/history"),
 
+  optimizeSportoto: (payload: {
+    week_id: number;
+    budget: number;
+    mode: "hit15" | "shield13" | "contrarian";
+    locks: Record<number, string>;
+  }) =>
+    requestJson<SportotoPlan>("/api/sportoto/optimize", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  getRecentNotifications: () =>
+    requestJson<{ items: NotificationItem[] }>("/api/notifications/recent"),
+
   adminGetSportotoWeeks: (secret: string) =>
     requestJson<{ items: SportotoWeekData[] }>("/api/admin/sportoto/weeks", {
       headers: { "X-Cron-Secret": secret },
     }),
 
-  adminParseSportoto: (secret: string, payload: { title: string; raw_text: string }) =>
+  adminParseSportoto: (
+    secret: string,
+    payload: { title: string; column_price?: number; raw_text: string }
+  ) =>
     requestJson<SportotoWeekData>("/api/admin/sportoto/parse", {
       method: "POST",
       headers: { "X-Cron-Secret": secret },
@@ -182,6 +201,9 @@ export const api = {
         odd_1?: number | null;
         odd_x?: number | null;
         odd_2?: number | null;
+        public_pct_1?: number | null;
+        public_pct_x?: number | null;
+        public_pct_2?: number | null;
         actual_result?: string | null;
       }[];
       auto_settle_from_db?: boolean;

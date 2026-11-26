@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ArrowRight, Check, Flame, Plus, Search, Send, ShieldCheck, X, Zap } from "lucide-react";
+import { ArrowRight, Check, Flame, Grid3X3, Plus, Search, Send, X, Zap } from "lucide-react";
 import { api } from "../api/client";
 import type {
   CustomSlipItem,
@@ -8,6 +8,7 @@ import type {
   PerformanceData,
   PredictionItem,
   SiteAnnouncement,
+  SportotoWeekData,
 } from "../types";
 import { formatMarketLabel, formatPickWithTeam, formatTurkishPossessive } from "../utils/format";
 import { ConfidenceRing } from "../components/ConfidenceRing";
@@ -18,7 +19,7 @@ interface Props {
   onSelectMatch: (matchId: number) => void;
   onGoPerformance: () => void;
   onGoCoupons: () => void;
-  onOpenHowItWorks: () => void;
+  onGoToto: () => void;
   telegramInviteUrl: string;
   slipItems: CustomSlipItem[];
   onToggleSlip: (item: CustomSlipItem) => void;
@@ -62,7 +63,7 @@ export function HighlightsPage({
   onSelectMatch,
   onGoPerformance,
   onGoCoupons,
-  onOpenHowItWorks,
+  onGoToto,
   telegramInviteUrl,
   slipItems,
   onToggleSlip,
@@ -75,6 +76,8 @@ export function HighlightsPage({
   const [todayCount, setTodayCount] = useState<number | null>(null);
   const [perf, setPerf] = useState<PerformanceData | null>(null);
   const [announcements, setAnnouncements] = useState<SiteAnnouncement[]>([]);
+  const [totoWeek, setTotoWeek] = useState<SportotoWeekData | null>(null);
+  const [activeCouponsCount, setActiveCouponsCount] = useState<number>(0);
   const [communityFavIds, setCommunityFavIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
   const [slideIdx, setSlideIdx] = useState(0);
@@ -136,6 +139,18 @@ export function HighlightsPage({
         }
       })
       .catch(() => {});
+    api
+      .getSportotoCurrent()
+      .then((res) => {
+        if (!cancelled) setTotoWeek(res.active ? res.week : null);
+      })
+      .catch(() => {});
+    api
+      .getCoupons()
+      .then((res) => {
+        if (!cancelled) setActiveCouponsCount(res.coupons?.length || 0);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -185,8 +200,29 @@ export function HighlightsPage({
       },
     }));
 
+    const totoSlides = totoWeek
+      ? [
+          {
+            key: `toto-${totoWeek.id}`,
+            icon: "toto" as const,
+            text: `Fikstra Toto ${totoWeek.title} yayında · 16–128 kolon şablonlarını hemen kur`,
+            onClick: onGoToto,
+          },
+        ]
+      : [];
+
+    const bulletinText =
+      analyzedToday !== null
+        ? activeCouponsCount > 0
+          ? `Bugün ${analyzedToday} maç analiz edildi · ${activeCouponsCount} hazır kupon yayında`
+          : `Bugün ${analyzedToday} maç analiz edildi · Günün öne çıkanlarına göz at`
+        : activeCouponsCount > 0
+        ? `${activeCouponsCount} hazır kupon yayında · Hemen incele`
+        : "Günün analizleri ve hazır kuponlarına göz at";
+
     return [
       ...announcementSlides,
+      ...totoSlides,
       {
         key: "trust",
         icon: "dots" as const,
@@ -194,37 +230,30 @@ export function HighlightsPage({
         onClick: onGoPerformance,
       },
       {
-        key: "telegram",
-        icon: "telegram" as const,
-        text: "Fikstra Telegram Terminali yayında · Anlık kupon, tekli ve günlük karne",
-        onClick: () => window.open(telegramInviteUrl, "_blank", "noopener,noreferrer"),
-      },
-      {
         key: "coupons",
         icon: "zap" as const,
-        text:
-          analyzedToday !== null
-            ? `Bugün ${analyzedToday} maç analiz edildi · Günün hazır kuponlarına göz at`
-            : "Günün analizleri ve hazır kuponlarına göz at",
+        text: bulletinText,
         onClick: onGoCoupons,
       },
       {
-        key: "transparency",
-        icon: "shield" as const,
-        text: "Tüm tahminler oranıyla kilitlenir · Sahte geçmiş üretilmez",
-        onClick: onOpenHowItWorks,
+        key: "telegram",
+        icon: "telegram" as const,
+        text: "Telegram grubumuza katıl · Günün kuponları ve maç sonuçları anında cebine gelsin",
+        onClick: () => window.open(telegramInviteUrl, "_blank", "noopener,noreferrer"),
       },
     ];
   }, [
     perf,
     announcements,
+    totoWeek,
+    activeCouponsCount,
     summary?.settled_total,
     summary?.overall_win_rate,
     summary?.active_matches_count,
     todayCount,
     onGoPerformance,
     onGoCoupons,
-    onOpenHowItWorks,
+    onGoToto,
     telegramInviteUrl,
   ]);
 
@@ -342,7 +371,7 @@ export function HighlightsPage({
         onMouseLeave={() => setTickerPaused(false)}
         onTouchStart={() => setTickerPaused(true)}
         onTouchEnd={() => setTickerPaused(false)}
-        className="w-full px-3.5 py-2.5 rounded-xl glass-card hover:border-[#00FF85]/40 transition-colors flex items-center justify-between gap-2 text-xs"
+        className="relative overflow-hidden w-full px-3.5 py-2.5 rounded-xl glass-card hover:border-[#00FF85]/40 transition-colors flex items-center justify-between gap-2 text-xs"
       >
         <button
           type="button"
@@ -363,14 +392,14 @@ export function HighlightsPage({
                   DUYURU
                 </span>
               )}
+              {activeSlide.icon === "toto" && (
+                <Grid3X3 className="w-3.5 h-3.5 text-[#00FF85] shrink-0" />
+              )}
               {activeSlide.icon === "telegram" && (
                 <Send className="w-3.5 h-3.5 text-[#00FF85] shrink-0" />
               )}
               {activeSlide.icon === "zap" && (
                 <Zap className="w-3.5 h-3.5 text-[#00FF85] shrink-0" />
-              )}
-              {activeSlide.icon === "shield" && (
-                <ShieldCheck className="w-3.5 h-3.5 text-[#00FF85] shrink-0" />
               )}
               <span className="text-slate-200 font-semibold truncate">{activeSlide.text}</span>
               {activeSlide.icon === "dots" && perf && perf.archive.length > 0 && (
@@ -409,6 +438,16 @@ export function HighlightsPage({
             />
           ))}
         </div>
+        {!prefersReducedMotion && (
+          <motion.div
+            key={`${activeSlide.key}-${tickerPaused ? "paused" : "run"}`}
+            initial={{ scaleX: 0 }}
+            animate={tickerPaused ? { scaleX: 0 } : { scaleX: 1 }}
+            transition={{ duration: 5, ease: "linear" }}
+            style={{ transformOrigin: "left" }}
+            className="absolute bottom-0 inset-x-0 h-[2px] bg-gradient-to-r from-[#00FF85]/30 via-[#00FF85] to-emerald-300/60"
+          />
+        )}
       </div>
 
       {/* Sticky Filter Row: Bugün · N / Tümü + Expandable 🔍 */}

@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Download,
   Flame,
+  Grid3X3,
   HelpCircle,
   Layers,
   Link2,
@@ -23,14 +24,16 @@ import { formatMarketLabel } from "./utils/format";
 import { ControlPanel } from "./components/ControlPanel";
 import { CouponShareModal } from "./components/CouponShareModal";
 import { MatchDetailDrawer } from "./components/MatchDetailDrawer";
+import { NotificationCenter } from "./components/NotificationCenter";
 import { StakeCalculator } from "./components/StakeCalculator";
 import type { ShareCouponPayload } from "./utils/couponShare";
 import { CouponsPage } from "./pages/CouponsPage";
+import { FikstraTotoPage } from "./pages/FikstraTotoPage";
 import { HighlightsPage } from "./pages/HighlightsPage";
 import { PerformancePage } from "./pages/PerformancePage";
 import type { CustomSlipItem, DashboardSummary, SavedSlip } from "./types";
 
-type TabKey = "highlights" | "coupons" | "performance";
+type TabKey = "highlights" | "coupons" | "toto" | "performance";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -54,31 +57,39 @@ function isControlPath(): boolean {
 
 type CouponsSubTab = "active" | "history" | "sportoto" | "tracked";
 
-function parseInitialUrl(): { tab: TabKey; matchId: number | null; couponsView: CouponsSubTab } {
+function parseInitialUrl(): {
+  tab: TabKey;
+  matchId: number | null;
+  couponsView: CouponsSubTab;
+  totoSlip: string | null;
+} {
   const path = window.location.pathname.toLowerCase();
   if (path === "/bulten" || path === "/bulletin") {
-    return { tab: "highlights", matchId: null, couponsView: "active" };
+    return { tab: "highlights", matchId: null, couponsView: "active", totoSlip: null };
   }
   const params = new URLSearchParams(window.location.search);
   const rawTab = params.get("tab");
-  const tab: TabKey =
-    rawTab === "coupons" || rawTab === "performance" || rawTab === "highlights"
+  const rawView = params.get("view");
+  let tab: TabKey =
+    rawTab === "coupons" || rawTab === "performance" || rawTab === "highlights" || rawTab === "toto"
       ? rawTab
       : "highlights";
-  const rawView = params.get("view");
+  if (tab === "coupons" && rawView === "sportoto") {
+    tab = "toto";
+  }
   const couponsView: CouponsSubTab =
-    rawView === "sportoto" || rawView === "history" || rawView === "tracked"
-      ? rawView
-      : "active";
+    rawView === "history" || rawView === "tracked" ? rawView : "active";
   const rawMatch = params.get("match");
   const parsedMatch = rawMatch ? Number(rawMatch) : NaN;
   const matchId = Number.isInteger(parsedMatch) && parsedMatch > 0 ? parsedMatch : null;
-  return { tab, matchId, couponsView };
+  const totoSlip = tab === "toto" ? params.get("slip") : null;
+  return { tab, matchId, couponsView, totoSlip };
 }
 
-const TABS: { key: TabKey; label: string; icon: typeof Flame }[] = [
-  { key: "highlights", label: "Öne Çıkanlar", icon: Flame },
+const TABS: { key: TabKey; label: string; mobileLabel?: string; badge?: string; icon: typeof Flame }[] = [
+  { key: "highlights", label: "Analizler", icon: Flame },
   { key: "coupons", label: "Kuponlar", icon: Layers },
+  { key: "toto", label: "Fikstra Toto", mobileLabel: "Toto", badge: "Yeni", icon: Grid3X3 },
   { key: "performance", label: "Performans", icon: BarChart3 },
 ];
 
@@ -105,6 +116,8 @@ export function App() {
   const initialUrlRef = useRef(parseInitialUrl());
   const [tab, setTab] = useState<TabKey>(initialUrlRef.current.tab);
   const [couponsView, setCouponsView] = useState<CouponsSubTab>(initialUrlRef.current.couponsView);
+  const [totoSlipParam, setTotoSlipParam] = useState<string | null>(initialUrlRef.current.totoSlip);
+  const [notifOpen, setNotifOpen] = useState(false);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [selectedMatch, setSelectedMatch] = useState<{
     matchId: number;
@@ -193,9 +206,10 @@ export function App() {
     });
   }, [showToast]);
 
-  // Hydrate shared slip from ?slip=12,45,89
+  // Hydrate shared slip from ?slip=12,45,89 (skip when ?tab=toto)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    if (params.get("tab") === "toto") return;
     const rawSlip = params.get("slip");
     if (!rawSlip) return;
     const ids = rawSlip
@@ -560,7 +574,14 @@ export function App() {
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5" />
-                  {t.label}
+                  {t.badge ? (
+                    <span className="inline-flex items-center gap-1">
+                      <span className="toto-shimmer-text font-extrabold">{t.label}</span>
+                      <span className="text-[11px] font-extrabold text-[#00FF85]">({t.badge})</span>
+                    </span>
+                  ) : (
+                    t.label
+                  )}
                   {t.key === "coupons" && slipItems.length > 0 && (
                     <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-[#00FF85] text-[#05080D] text-[10px] font-extrabold mono-nums leading-none">
                       {slipItems.length}
@@ -581,21 +602,22 @@ export function App() {
               target="_blank"
               rel="noopener noreferrer"
               className="h-9 w-9 sm:w-auto sm:px-3 rounded-full glass-card border-emerald-500/30 hover:border-[#00FF85]/55 text-emerald-300 hover:text-[#00FF85] flex items-center justify-center gap-1.5 text-xs font-bold transition-all"
-              title="Fikstra Telegram Grubu"
-              aria-label="Fikstra Telegram Grubu"
+              title="Telegram Grubu"
+              aria-label="Telegram Grubu"
             >
               <Send className="w-3.5 h-3.5 shrink-0" />
               <span className="hidden sm:inline">Telegram</span>
             </a>
 
             <button
-              onClick={handleEnablePush}
+              onClick={() => setNotifOpen(true)}
               className={`relative w-9 h-9 rounded-full glass-card flex items-center justify-center transition-all ${
                 pushStatus === "enabled"
                   ? "border-[#00FF85]/55 text-[#00FF85] shadow-[0_0_12px_-3px_rgba(0,255,133,0.45)]"
                   : "text-slate-300 hover:border-[#00FF85]/40 hover:text-white"
               }`}
-              title="Bildirimleri Aç"
+              title="Bildirim Merkezi"
+              aria-label="Bildirim Merkezi"
             >
               {pushStatus === "enabled" ? (
                 <BellRing className="w-4 h-4" />
@@ -690,7 +712,7 @@ export function App() {
             onSelectMatch={(id) => setSelectedMatch({ matchId: id })}
             onGoPerformance={() => setTab("performance")}
             onGoCoupons={() => setTab("coupons")}
-            onOpenHowItWorks={() => setHowItWorksOpen(true)}
+            onGoToto={() => setTab("toto")}
             telegramInviteUrl={TELEGRAM_INVITE_URL}
             slipItems={slipItems}
             onToggleSlip={handleToggleSlip}
@@ -712,6 +734,14 @@ export function App() {
             onSaveSlip={handleSaveSlip}
             onCopySlipLink={handleCopySlipLink}
             onDeleteSavedSlip={handleDeleteSavedSlip}
+            refreshTrigger={refreshTrigger}
+          />
+        )}
+        {tab === "toto" && (
+          <FikstraTotoPage
+            telegramInviteUrl={TELEGRAM_INVITE_URL}
+            initialSlipParam={totoSlipParam}
+            onConsumeSlipParam={() => setTotoSlipParam(null)}
             refreshTrigger={refreshTrigger}
           />
         )}
@@ -960,9 +990,9 @@ export function App() {
         )}
       </AnimatePresence>
 
-      {/* Mobile Floating Symmetric 3-Tab Bottom Navigation Dock */}
-      <nav className="md:hidden fixed bottom-[calc(0.75rem+env(safe-area-inset-bottom))] inset-x-3 z-40">
-        <div className="relative rounded-2xl bg-[#080E18]/92 backdrop-blur-2xl border border-emerald-500/20 shadow-[0_12px_35px_-10px_rgba(0,0,0,0.85)] px-2 py-1.5 grid grid-cols-3 items-center">
+      {/* Mobile Floating Symmetric 4-Tab Bottom Navigation Dock */}
+      <nav className="md:hidden fixed bottom-[calc(0.75rem+env(safe-area-inset-bottom))] inset-x-2.5 z-40">
+        <div className="relative rounded-2xl bg-[#080E18]/92 backdrop-blur-2xl border border-emerald-500/20 shadow-[0_12px_35px_-10px_rgba(0,0,0,0.85)] px-1 py-1.5 grid grid-cols-4 items-center">
           {TABS.map((t) => {
             const Icon = t.icon;
             const active = tab === t.key;
@@ -970,7 +1000,7 @@ export function App() {
               <button
                 key={t.key}
                 onClick={() => setTab(t.key)}
-                className={`relative flex flex-col items-center justify-center py-1.5 rounded-xl transition-colors ${
+                className={`relative flex flex-col items-center justify-center py-1.5 px-0.5 rounded-xl transition-colors min-w-0 ${
                   active ? "text-[#00FF85]" : "text-slate-400"
                 }`}
               >
@@ -981,8 +1011,19 @@ export function App() {
                       {slipItems.length}
                     </span>
                   )}
+                  {t.badge && (
+                    <span className="absolute -top-2 -right-5 px-1 py-[1px] rounded-full bg-[#00FF85] text-[#05080D] text-[7.5px] font-extrabold leading-none shadow">
+                      {t.badge}
+                    </span>
+                  )}
                 </div>
-                <span className="text-[10px] font-semibold mt-0.5 truncate">{t.label}</span>
+                <span
+                  className={`text-[10px] font-semibold mt-0.5 truncate max-w-full ${
+                    t.badge ? "toto-shimmer-text font-extrabold" : ""
+                  }`}
+                >
+                  {t.mobileLabel || t.label}
+                </span>
                 {active && (
                   <span className="absolute bottom-0.5 w-6 h-[2.5px] rounded-full bg-[#00FF85] shadow-[0_0_8px_#00FF85]" />
                 )}
@@ -991,6 +1032,28 @@ export function App() {
           })}
         </div>
       </nav>
+
+      <NotificationCenter
+        open={notifOpen}
+        onClose={() => setNotifOpen(false)}
+        pushStatus={pushStatus}
+        onEnablePush={handleEnablePush}
+        onNavigateUrl={(url) => {
+          try {
+            const parsed = new URL(url, window.location.origin);
+            const t = parsed.searchParams.get("tab");
+            const m = Number(parsed.searchParams.get("match"));
+            if (t === "coupons" || t === "toto" || t === "performance" || t === "highlights") {
+              setTab(t);
+            }
+            if (Number.isInteger(m) && m > 0) {
+              setSelectedMatch({ matchId: m });
+            }
+          } catch {
+            // ignore
+          }
+        }}
+      />
 
       {/* Match Detail Bottom Sheet / Modal */}
       <MatchDetailDrawer

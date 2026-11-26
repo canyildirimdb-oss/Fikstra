@@ -33,9 +33,16 @@ self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const targetUrl = (event.notification.data as { url?: string })?.url || "/";
   event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (clients) => {
       for (const client of clients) {
         if ("focus" in client) {
+          if ("navigate" in client && targetUrl) {
+            try {
+              await client.navigate(targetUrl);
+            } catch {
+              // ignore cross-origin or unsupported navigate
+            }
+          }
           return client.focus();
         }
       }

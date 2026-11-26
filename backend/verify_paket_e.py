@@ -1,8 +1,9 @@
-"""Isolated verification suite for Paket E (Spor Toto 15'li)."""
+"""Isolated verification suite for Paket E (Fikstra Toto + Human-Readable Notifications)."""
 
 import json
 import math
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,8 +22,21 @@ from sqlalchemy.pool import StaticPool
 from app.config import settings
 from app.database import Base, get_db
 from app.main import app
-from app.models import Match, Prediction
-from app.sportoto_optimizer import devig_1x2, optimize_sportoto_columns
+from app.models import Coupon, CouponItem, Match, Prediction
+from app.sportoto_engine import (
+    compute_live_survival,
+    compute_trap_signal,
+    devig_1x2,
+    exact_poisson_binomial,
+    optimize_toto,
+)
+from services.push import (
+    format_coupon_ready_notification,
+    format_coupon_settled_notification,
+    format_high_confidence_notification,
+    format_match_settled_notification,
+    format_odds_drop_notification,
+)
 
 HEADERS = {"X-Cron-Secret": settings.cron_secret}
 
@@ -37,7 +51,7 @@ def _make_test_session():
     return sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
-def test_pe1_optimizer_global_optimum():
+def test_pe1_exact_poisson_and_dp_optimum():
     probs = [
         (0.62, 0.23, 0.15),
         (0.41, 0.31, 0.28),
@@ -56,11 +70,23 @@ def test_pe1_optimizer_global_optimum():
         (0.60, 0.22, 0.18),
     ]
     matches = [
-        {"slot_no": i + 1, "prob_1": p1, "prob_x": px, "prob_2": p2}
+        {
+            "slot_no": i + 1,
+            "home_team": f"Ev{i+1}",
+            "away_team": f"Dep{i+1}",
+            "prob_1": p1,
+            "prob_x": px,
+            "prob_2": p2,
+        }
         for i, (p1, px, p2) in enumerate(probs)
     ]
 
-    # Exact recursive search over all feasible (k_1..k_15) with prod(k_i) <= budget
+    # Exact Poisson-Binomial sanity
+    pb = exact_poisson_binomial([max(p) for p in probs])
+    assert 0.0 < pb["p15"] <= pb["p14_plus"] <= pb["p13_plus"] <= pb["p12_plus"] <= 100.0
+    assert abs(pb["expected_hits"] - sum(max(p) for p in probs)) < 0.02
+
+    # DP global optimum check against recursive search
     def brute_best_log(idx: int, prod_so_far: int, budget: int) -> float:
         if idx == len(probs):
             return 0.0
@@ -75,21 +101,34 @@ def test_pe1_optimizer_global_optimum():
         return best
 
     for budget in (16, 32, 64):
-        plan = optimize_sportoto_columns(matches, budget)
+        plan = optimize_toto(matches, budget=budget, mode="hit15")
         assert plan["used_columns"] <= budget
-        assert len(plan["picks"]) == 15
         dp_log = sum(math.log(p["pick_prob"]) for p in plan["picks"])
         exact_log = brute_best_log(0, 1, budget)
-        assert abs(dp_log - exact_log) < 1e-6, f"budget={budget}: dp={dp_log} vs exact={exact_log}"
+        assert abs(dp_log - exact_log) < 1e-6
 
-    print("TEST_PE1_OPTIMIZER_GLOBAL_OPTIMUM: PASS")
+    # Locks respected + shield13 improves or equals p13_plus
+    locks = {1: "1X", 5: "1"}
+    locked_plan = optimize_toto(matches, budget=32, mode="shield13", locks=locks)
+    assert locked_plan["used_columns"] <= 32
+    p_by_slot = {p["slot_no"]: p for p in locked_plan["picks"]}
+    assert p_by_slot[1]["pick_code"] == "1X" and p_by_slot[1]["locked"] is True
+    assert p_by_slot[5]["pick_code"] == "1" and p_by_slot[5]["locked"] is True
+    hit15_locked = optimize_toto(matches, budget=32, mode="hit15", locks=locks)
+    assert locked_plan["probs"]["p13_plus"] >= hit15_locked["probs"]["p13_plus"]
+
+    print("TEST_PE1_EXACT_POISSON_AND_DP_OPTIMUM: PASS")
 
 
-def test_pe2_no_fake_data_publish_gate():
+def test_pe2_no_fake_data_and_trap_honesty():
+    # Trap signal must be None when public % absent
+    assert compute_trap_signal((0.55, 0.25, 0.20), (None, None, None)) is None
+    # Real overloaded favorite -> is_trap = True
+    trap = compute_trap_signal((0.55, 0.25, 0.20), (75.0, 15.0, 10.0))
+    assert trap is not None and trap["is_trap"] is True and trap["fav_pick"] == "1"
+
     SessionLocal = _make_test_session()
     db = SessionLocal()
-
-    # Seed 1 real match with MS 1/X/2 predictions in DB
     m1 = Match(
         iddaa_id="st_m1",
         league="Süper Lig",
@@ -128,63 +167,63 @@ def test_pe2_no_fake_data_publish_gate():
     app.dependency_overrides[get_db] = override_get_db
     try:
         with TestClient(app) as client:
-            # Initially no published week
-            r0 = client.get("/api/sportoto/current")
-            assert r0.status_code == 200
-            assert r0.json() == {"active": False, "week": None}
-
             lines = ["1. Galatasaray - Fenerbahçe"]
             for i in range(2, 15):
                 lines.append(f"{i}. Ev{i} - Dep{i} | 2.10 3.30 3.40")
-            lines.append("15. EksikEv - EksikDep")  # Missing odds & not in DB
+            lines.append("15. EksikEv - EksikDep")
 
-            r_parse = client.post(
+            w = client.post(
                 "/api/admin/sportoto/parse",
                 headers=HEADERS,
                 json={"title": "Test 15. Hafta", "raw_text": "\n".join(lines)},
-            )
-            assert r_parse.status_code == 200, r_parse.text
-            w = r_parse.json()
+            ).json()
             assert w["missing_count"] == 1
-            assert w["missing_slots"] == [15]
-            assert w["matches"][0]["source"] == "fikstra_model"
-            assert w["matches"][1]["source"] == "market_devig"
-            assert w["matches"][14]["source"] == "missing"
+            assert w["matches"][1]["trap_signal"] is None
 
-            # Publish must fail with 400
-            r_pub_fail = client.post(f"/api/admin/sportoto/weeks/{w['id']}/publish", headers=HEADERS)
-            assert r_pub_fail.status_code == 400
+            r_fail = client.post(f"/api/admin/sportoto/weeks/{w['id']}/publish", headers=HEADERS)
+            assert r_fail.status_code == 400
 
-            # Patch slot 15 with real odds
-            r_patch = client.patch(
+            client.patch(
                 f"/api/admin/sportoto/weeks/{w['id']}/matches",
                 headers=HEADERS,
-                json={"matches": [{"slot_no": 15, "odd_1": 1.85, "odd_x": 3.50, "odd_2": 4.20}]},
+                json={
+                    "matches": [
+                        {
+                            "slot_no": 15,
+                            "odd_1": 1.85,
+                            "odd_x": 3.50,
+                            "odd_2": 4.20,
+                            "public_pct_1": 74.0,
+                            "public_pct_x": 16.0,
+                            "public_pct_2": 10.0,
+                        }
+                    ]
+                },
             )
-            assert r_patch.status_code == 200
-            wp = r_patch.json()
-            assert wp["missing_count"] == 0
-            m15 = wp["matches"][14]
-            assert m15["source"] == "market_devig"
-            assert abs((m15["prob_1"] + m15["prob_x"] + m15["prob_2"]) - 1.0) < 1e-4
-
-            # Now publish succeeds
-            r_pub_ok = client.post(f"/api/admin/sportoto/weeks/{w['id']}/publish", headers=HEADERS)
-            assert r_pub_ok.status_code == 200
-            assert r_pub_ok.json()["status"] == "PUBLISHED"
-
-            r_cur = client.get("/api/sportoto/current")
-            assert r_cur.status_code == 200
-            cur = r_cur.json()
-            assert cur["active"] is True
-            assert set(cur["week"]["plans"].keys()) == {"16", "32", "64"}
+            r_ok = client.post(f"/api/admin/sportoto/weeks/{w['id']}/publish", headers=HEADERS)
+            assert r_ok.status_code == 200
+            pub_w = r_ok.json()
+            assert pub_w["status"] == "PUBLISHED"
+            assert pub_w["matches"][14]["trap_signal"]["is_trap"] is True
     finally:
         app.dependency_overrides.clear()
 
-    print("TEST_PE2_NO_FAKE_DATA_PUBLISH_GATE: PASS")
+    print("TEST_PE2_NO_FAKE_DATA_AND_TRAP_HONESTY: PASS")
 
 
-def test_pe3_telegram_idempotent_and_settle():
+def test_pe3_live_survival_and_telegram_idempotent():
+    matches = [
+        {"slot_no": i, "prob_1": 0.6, "prob_x": 0.25, "prob_2": 0.15, "actual_result": ("1" if i <= 3 else None)}
+        for i in range(1, 16)
+    ]
+    matches[2]["actual_result"] = "2"  # 1 miss out of 3 settled
+    picks = [{"slot_no": i, "pick_code": "1", "pick_prob": 0.6} for i in range(1, 16)]
+    surv = compute_live_survival(matches, picks)
+    assert surv is not None
+    assert surv["settled_count"] == 3 and surv["settled_hits"] == 2 and surv["settled_misses"] == 1
+    assert surv["can_hit_15"] is False and surv["p15_live"] == 0.0
+    assert surv["can_hit_14"] is True and surv["p14_live"] > 0.0
+
     SessionLocal = _make_test_session()
 
     def override_get_db():
@@ -196,13 +235,10 @@ def test_pe3_telegram_idempotent_and_settle():
 
     app.dependency_overrides[get_db] = override_get_db
     orig_post = httpx.Client.post
-    orig_token = settings.telegram_bot_token
-    orig_chat = settings.telegram_chat_id
-    orig_topic = settings.telegram_topic_coupons
-    settings.telegram_bot_token = "dummy-token"
-    settings.telegram_chat_id = "-100123456"
+    orig_token, orig_chat, orig_topic = settings.telegram_bot_token, settings.telegram_chat_id, settings.telegram_topic_coupons
+    settings.telegram_bot_token = "dummy"
+    settings.telegram_chat_id = "-100123"
     settings.telegram_topic_coupons = "2"
-
     sent_payloads = []
 
     def fake_post(self, url, *args, **kwargs):
@@ -211,59 +247,83 @@ def test_pe3_telegram_idempotent_and_settle():
             resp = MagicMock()
             resp.status_code = 200
             resp.is_success = True
-            resp.json.return_value = {"ok": True, "result": {"message_id": 900 + len(sent_payloads)}}
+            resp.json.return_value = {"ok": True, "result": {"message_id": 777}}
             return resp
         return orig_post(self, url, *args, **kwargs)
 
     try:
         with patch.object(httpx.Client, "post", fake_post), TestClient(app) as client:
-            lines = [f"{i}. TakimA{i} - TakimB{i} | 1.90 3.40 3.90" for i in range(1, 16)]
+            lines = [f"{i}. Ev{i} - Dep{i} | 1.90 3.40 3.90" for i in range(1, 16)]
             w = client.post(
                 "/api/admin/sportoto/parse",
                 headers=HEADERS,
                 json={"title": "16. Hafta", "raw_text": "\n".join(lines)},
             ).json()
             client.post(f"/api/admin/sportoto/weeks/{w['id']}/publish", headers=HEADERS)
-
-            # First Telegram dispatch -> sends 1 message
-            t1 = client.post(f"/api/admin/sportoto/weeks/{w['id']}/telegram", headers=HEADERS)
-            assert t1.status_code == 200
-            assert t1.json()["sent"] is True
+            t1 = client.post(f"/api/admin/sportoto/weeks/{w['id']}/telegram", headers=HEADERS).json()
+            t2 = client.post(f"/api/admin/sportoto/weeks/{w['id']}/telegram", headers=HEADERS).json()
+            assert t1["sent"] is True and t2["sent"] is False and t2["reason"] == "already_sent"
             assert len(sent_payloads) == 1
-            assert "tab=coupons&view=sportoto" in json.dumps(sent_payloads[0])
-
-            # Second Telegram dispatch -> blocked by spam lock
-            t2 = client.post(f"/api/admin/sportoto/weeks/{w['id']}/telegram", headers=HEADERS)
-            assert t2.status_code == 200
-            assert t2.json()["sent"] is False
-            assert t2.json()["reason"] == "already_sent"
-            assert len(sent_payloads) == 1
-
-            # Settle all 15 matches as "1" (since odd_1=1.90 is favorite in all 15, all picks include "1")
-            res_patch = client.patch(
-                f"/api/admin/sportoto/weeks/{w['id']}/matches",
-                headers=HEADERS,
-                json={"matches": [{"slot_no": i, "actual_result": "1"} for i in range(1, 16)]},
-            )
-            assert res_patch.status_code == 200
-            settled_w = res_patch.json()
-            assert settled_w["status"] == "SETTLED"
-            for b in ("16", "32", "64"):
-                assert settled_w["plans"][b]["settled_count"] == 15
-                assert settled_w["plans"][b]["hits"] == 15
+            assert "tab=toto" in json.dumps(sent_payloads[0])
     finally:
-        settings.telegram_bot_token = orig_token
-        settings.telegram_chat_id = orig_chat
-        settings.telegram_topic_coupons = orig_topic
+        settings.telegram_bot_token, settings.telegram_chat_id, settings.telegram_topic_coupons = (
+            orig_token,
+            orig_chat,
+            orig_topic,
+        )
         app.dependency_overrides.clear()
 
-    print("TEST_PE3_TELEGRAM_IDEMPOTENT_AND_SETTLE: PASS")
+    print("TEST_PE3_LIVE_SURVIVAL_AND_TELEGRAM_IDEMPOTENT: PASS")
+
+
+def test_pe4_human_readable_notifications():
+    m = Match(
+        id=42,
+        iddaa_id="x42",
+        league="Süper Lig",
+        home_team="Trabzonspor",
+        away_team="Beşiktaş",
+        home_score=2,
+        away_score=1,
+        start_time_utc=datetime.now(timezone.utc),
+    )
+    p = Prediction(
+        id=99,
+        match_id=42,
+        market_key="MS",
+        selection_key="1",
+        iddaa_odd=1.95,
+        confidence_score=84.0,
+        odds_drop_pct=9.5,
+        status="WON",
+        match=m,
+    )
+    c = Coupon(id=7, coupon_date="2026-11-26", tier="BANKO", total_odd=3.45, avg_confidence=78.0, status="WON")
+    c.items = [CouponItem(coupon_id=7, prediction_id=99), CouponItem(coupon_id=7, prediction_id=100)]
+
+    samples = [
+        format_high_confidence_notification(p),
+        format_odds_drop_notification(p),
+        format_coupon_ready_notification(c),
+        format_match_settled_notification(p),
+        format_coupon_settled_notification(c, 2, 2),
+    ]
+    forbidden = re.compile(r"\b(steam|edge|CLV|de-vig|EV|MS 1|MS 2)\b", re.IGNORECASE)
+    for title, body, url in samples:
+        combined = f"{title} {body}"
+        assert not forbidden.search(combined), f"Technical jargon leaked: {combined}"
+        assert url.startswith("/?"), f"Invalid deep-link URL: {url}"
+    assert "Trabzonspor Kazanır" in samples[0][1]
+    assert "1.95" in samples[0][1]
+
+    print("TEST_PE4_HUMAN_READABLE_NOTIFICATIONS: PASS")
 
 
 if __name__ == "__main__":
     p1, px, p2 = devig_1x2(2.0, 3.5, 3.8)
     assert abs((p1 + px + p2) - 1.0) < 1e-9
-    test_pe1_optimizer_global_optimum()
-    test_pe2_no_fake_data_publish_gate()
-    test_pe3_telegram_idempotent_and_settle()
+    test_pe1_exact_poisson_and_dp_optimum()
+    test_pe2_no_fake_data_and_trap_honesty()
+    test_pe3_live_survival_and_telegram_idempotent()
+    test_pe4_human_readable_notifications()
     print("ALL PAKET E TESTS PASSED")

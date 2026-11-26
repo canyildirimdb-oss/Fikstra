@@ -7,13 +7,17 @@ interface RowDraft {
   odd_1: string;
   odd_x: string;
   odd_2: string;
+  pub_1: string;
+  pub_x: string;
+  pub_2: string;
   actual_result: string;
 }
 
 export function SportotoAdminPanel({ secret }: { secret: string }) {
   const [weeks, setWeeks] = useState<SportotoWeekData[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [title, setTitle] = useState("Spor Toto Haftası");
+  const [title, setTitle] = useState("Fikstra Toto Haftası");
+  const [columnPrice, setColumnPrice] = useState("10");
   const [rawText, setRawText] = useState("");
   const [rowEdits, setRowEdits] = useState<Record<number, RowDraft>>({});
   const [busy, setBusy] = useState(false);
@@ -38,6 +42,9 @@ export function SportotoAdminPanel({ secret }: { secret: string }) {
               odd_1: m.odd_1 !== null ? String(m.odd_1) : "",
               odd_x: m.odd_x !== null ? String(m.odd_x) : "",
               odd_2: m.odd_2 !== null ? String(m.odd_2) : "",
+              pub_1: m.public_pct_1 !== null ? String(m.public_pct_1) : "",
+              pub_x: m.public_pct_x !== null ? String(m.public_pct_x) : "",
+              pub_2: m.public_pct_2 !== null ? String(m.public_pct_2) : "",
               actual_result: m.actual_result || "",
             };
           }
@@ -67,6 +74,9 @@ export function SportotoAdminPanel({ secret }: { secret: string }) {
         odd_1: m.odd_1 !== null ? String(m.odd_1) : "",
         odd_x: m.odd_x !== null ? String(m.odd_x) : "",
         odd_2: m.odd_2 !== null ? String(m.odd_2) : "",
+        pub_1: m.public_pct_1 !== null ? String(m.public_pct_1) : "",
+        pub_x: m.public_pct_x !== null ? String(m.public_pct_x) : "",
+        pub_2: m.public_pct_2 !== null ? String(m.public_pct_2) : "",
         actual_result: m.actual_result || "",
       };
     }
@@ -83,7 +93,8 @@ export function SportotoAdminPanel({ secret }: { secret: string }) {
     setErr(null);
     try {
       const created = await api.adminParseSportoto(secret, {
-        title: title.trim() || "Spor Toto Haftası",
+        title: title.trim() || "Fikstra Toto Haftası",
+        column_price: Math.max(1, Number(columnPrice) || 10),
         raw_text: rawText,
       });
       setRawText("");
@@ -108,9 +119,14 @@ export function SportotoAdminPanel({ secret }: { secret: string }) {
         const ox = d?.odd_x ? Number(d.odd_x.replace(",", ".")) : null;
         const o2 = d?.odd_2 ? Number(d.odd_2.replace(",", ".")) : null;
         const validOdds = o1 && ox && o2 && o1 > 1 && ox > 1 && o2 > 1;
+        const p1 = d?.pub_1 ? Number(d.pub_1.replace(",", ".")) : null;
+        const px = d?.pub_x ? Number(d.pub_x.replace(",", ".")) : null;
+        const p2 = d?.pub_2 ? Number(d.pub_2.replace(",", ".")) : null;
+        const validPub = p1 && px && p2 && p1 > 0 && px > 0 && p2 > 0;
         return {
           slot_no: m.slot_no,
           ...(validOdds ? { odd_1: o1, odd_x: ox, odd_2: o2 } : {}),
+          ...(validPub ? { public_pct_1: p1, public_pct_x: px, public_pct_2: p2 } : {}),
           actual_result: d?.actual_result ?? "",
         };
       });
@@ -207,18 +223,30 @@ export function SportotoAdminPanel({ secret }: { secret: string }) {
 
       {/* Parse Form */}
       <form onSubmit={handleParse} className="space-y-2.5">
-        <input
-          type="text"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Hafta başlığı (ör. 15. Hafta)"
-          className="w-full px-3 py-2 rounded-xl bg-[#05080D] border border-[#1F2937] text-xs text-slate-100 focus:outline-none focus:border-[#00FF85]/60"
-        />
+        <div className="flex flex-col sm:flex-row gap-2">
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Hafta başlığı (ör. 15. Hafta)"
+            className="flex-1 px-3 py-2 rounded-xl bg-[#05080D] border border-[#1F2937] text-xs text-slate-100 focus:outline-none focus:border-[#00FF85]/60"
+          />
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={columnPrice}
+            onChange={(e) => setColumnPrice(e.target.value)}
+            placeholder="Kolon ₺"
+            className="w-24 px-3 py-2 rounded-xl bg-[#05080D] border border-[#1F2937] text-xs text-slate-100 mono-nums focus:outline-none focus:border-[#00FF85]/60"
+            title="Kolon fiyatı (₺)"
+          />
+        </div>
         <textarea
           rows={4}
           value={rawText}
           onChange={(e) => setRawText(e.target.value)}
-          placeholder={"15 satır yapıştır:\nGalatasaray - Fenerbahçe\nBeşiktaş - Trabzonspor | 2.10 3.40 3.20"}
+          placeholder={"15 satır yapıştır:\nGalatasaray - Fenerbahçe\nBeşiktaş - Trabzonspor | 2.10 3.40 3.20\nFenerbahçe - Kasımpaşa | 1.35 4.80 7.50 | 78 14 8"}
           className="w-full px-3 py-2 rounded-xl bg-[#05080D] border border-[#1F2937] text-xs text-slate-100 font-mono focus:outline-none focus:border-[#00FF85]/60"
         />
         <button
@@ -296,7 +324,7 @@ export function SportotoAdminPanel({ secret }: { secret: string }) {
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                     {(["odd_1", "odd_x", "odd_2"] as const).map((field, idx) => (
                       <input
                         key={field}
@@ -310,7 +338,24 @@ export function SportotoAdminPanel({ secret }: { secret: string }) {
                             [m.slot_no]: { ...ed, [field]: e.target.value },
                           }))
                         }
-                        className="w-12 px-1.5 py-1 rounded bg-[#0B121D] border border-[#1F2937] text-[11px] text-center text-slate-100 mono-nums"
+                        className="w-11 px-1 py-1 rounded bg-[#0B121D] border border-[#1F2937] text-[11px] text-center text-slate-100 mono-nums"
+                      />
+                    ))}
+                    {(["pub_1", "pub_x", "pub_2"] as const).map((field, idx) => (
+                      <input
+                        key={field}
+                        type="text"
+                        inputMode="decimal"
+                        placeholder={["%1", "%X", "%2"][idx]}
+                        value={ed[field]}
+                        onChange={(e) =>
+                          setRowEdits((prev) => ({
+                            ...prev,
+                            [m.slot_no]: { ...ed, [field]: e.target.value },
+                          }))
+                        }
+                        className="w-10 px-1 py-1 rounded bg-[#0B121D] border border-[#1F2937]/70 text-[10px] text-center text-cyan-200 mono-nums"
+                        title="Opsiyonel halk yüzdesi"
                       />
                     ))}
                     <select

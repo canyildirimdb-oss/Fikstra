@@ -238,6 +238,8 @@ class NotificationLog(Base):
     dedupe_key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     title: Mapped[str] = mapped_column(String(256))
     body: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(32), default="info")
+    url: Mapped[str] = mapped_column(String(256), default="/")
     sent_count: Mapped[int] = mapped_column(Integer, default=0)
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
@@ -299,6 +301,7 @@ class SportotoWeek(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     title: Mapped[str] = mapped_column(String(120))
     status: Mapped[str] = mapped_column(String(24), default="DRAFT", index=True)  # DRAFT | PUBLISHED | SETTLED
+    column_price: Mapped[float] = mapped_column(Float, default=10.0)
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
@@ -330,6 +333,9 @@ class SportotoMatch(Base):
     prob_1: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     prob_x: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     prob_2: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    public_pct_1: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    public_pct_x: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    public_pct_2: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     actual_result: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)  # 1 | X | 2 | None
 
     week: Mapped["SportotoWeek"] = relationship(back_populates="matches")

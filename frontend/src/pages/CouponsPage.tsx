@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowDownToLine, BookmarkPlus, Layers, Link2, Lock, Share2, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import { api } from "../api/client";
 import { CouponShareModal } from "../components/CouponShareModal";
-import { SportotoView } from "../components/SportotoView";
 import { StakeCalculator } from "../components/StakeCalculator";
 import { TeamBadge } from "../components/TeamBadge";
 import type { CouponData, CustomSlipItem, PredictionStatusItem, SavedSlip } from "../types";
@@ -168,7 +167,7 @@ export function CouponsPage({
 
   return (
     <div className="space-y-5">
-      {/* Güncel Kuponlar | Geçmiş Kuponlar | Spor Toto 15'li | Takip Ettiklerim Switch */}
+      {/* Güncel Kuponlar | Geçmiş Kuponlar | Takip Ettiklerim Switch */}
       <div className="flex flex-wrap items-center gap-2">
         <button
           onClick={() => setSubTab("active")}
@@ -202,16 +201,6 @@ export function CouponsPage({
           )}
         </button>
         <button
-          onClick={() => setSubTab("sportoto")}
-          className={`px-3.5 py-2 rounded-full text-xs font-bold transition-all ${
-            subTab === "sportoto"
-              ? "bg-[#00FF85] text-[#05080D] shadow-[0_0_18px_-4px_rgba(0,255,133,0.75)]"
-              : "glass-card text-slate-300 hover:text-white"
-          }`}
-        >
-          Spor Toto 15&apos;li
-        </button>
-        <button
           onClick={() => setSubTab("tracked")}
           className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-bold transition-all ${
             subTab === "tracked"
@@ -233,9 +222,6 @@ export function CouponsPage({
           )}
         </button>
       </div>
-
-      {/* Spor Toto 15'li View */}
-      {subTab === "sportoto" && <SportotoView refreshTrigger={refreshTrigger} />}
 
       {/* Tracked User Slips (localStorage + live DB status) */}
       {subTab === "tracked" && (

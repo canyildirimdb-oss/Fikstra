@@ -205,12 +205,12 @@ export function PerformancePage({ refreshTrigger }: Props) {
         </div>
       </div>
 
-      {/* Keskinlik Karnesi: Lig & Piyasa Kırılımı */}
+      {/* Fikstra Karne: Lig & Piyasa Kırılımı */}
       <div className="p-4 rounded-2xl glass-card space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h4 className="text-xs font-semibold text-slate-200 uppercase tracking-wider">
-              Keskinlik Karnesi
+              Fikstra Karne
             </h4>
             <p className="text-[11px] text-slate-400">
               Sonuçlanmış resmi 60+ tahminlere göre gerçek isabet dağılımı

@@ -22,7 +22,7 @@ from app.config import settings
 from app.database import ensure_schema, get_db
 from app.models import Coupon, CouponItem, Match, Prediction, PushSubscription, ScraperCache, SiteAnnouncement, SportotoMatch, SportotoWeek, SyncLog, TelegramDispatch
 from app.routers.api import clear_api_cache, router as api_router
-from app.sportoto_optimizer import (
+from app.sportoto_engine import (
     VALID_RESULTS,
     devig_1x2,
     match_and_create_sportoto_week,
@@ -38,6 +38,7 @@ from app.telegram_bot import (
     setup_telegram_webhook,
 )
 from services.ai_summary import is_gemini_circuit_open
+from services.push import notify_sportoto_published
 from services.settlement import settle_coupons, settle_finished_matches
 from services.sync import is_sync_running, run_sync_pipeline
 
@@ -548,6 +549,7 @@ def admin_export_calibration_csv(
 class SportotoParseIn(BaseModel):
     title: str
     raw_text: str
+    column_price: float = 10.0
 
 
 class SportotoMatchPatchItem(BaseModel):
@@ -555,6 +557,9 @@ class SportotoMatchPatchItem(BaseModel):
     odd_1: Optional[float] = None
     odd_x: Optional[float] = None
     odd_2: Optional[float] = None
+    public_pct_1: Optional[float] = None
+    public_pct_x: Optional[float] = None
+    public_pct_2: Optional[float] = None
     actual_result: Optional[str] = None
 
 
@@ -587,7 +592,9 @@ def admin_parse_sportoto_week(
 ):
     _verify_cron_secret(x_cron_secret)
     try:
-        week = match_and_create_sportoto_week(db, payload.title, payload.raw_text)
+        week = match_and_create_sportoto_week(
+            db, payload.title, payload.raw_text, column_price=payload.column_price
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return serialize_sportoto_week(week, include_plans=True)
@@ -652,6 +659,14 @@ def admin_patch_sportoto_matches(
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=f"Slot {item.slot_no}: {exc}")
 
+        if item.public_pct_1 is not None and item.public_pct_x is not None and item.public_pct_2 is not None:
+            p_sum = float(item.public_pct_1) + float(item.public_pct_x) + float(item.public_pct_2)
+            if item.public_pct_1 <= 0 or item.public_pct_x <= 0 or item.public_pct_2 <= 0 or not (95.0 <= p_sum <= 105.0):
+                raise HTTPException(status_code=400, detail=f"Slot {item.slot_no}: Halk yüzdeleri >0 ve toplamı ~100 olmalıdır")
+            sm.public_pct_1 = float(item.public_pct_1)
+            sm.public_pct_x = float(item.public_pct_x)
+            sm.public_pct_2 = float(item.public_pct_2)
+
         if item.actual_result is not None:
             res = item.actual_result.strip().upper()
             if res == "":
@@ -701,6 +716,10 @@ def admin_publish_sportoto_week(
         week.published_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(week)
+    try:
+        notify_sportoto_published(db, week.id, week.title)
+    except Exception:
+        pass
     return serialize_sportoto_week(week, include_plans=True)
 
 

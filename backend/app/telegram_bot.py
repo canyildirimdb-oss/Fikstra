@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
 from app.models import Coupon, CouponItem, Match, Prediction, ScraperCache, SportotoWeek, SyncLog, TelegramDispatch
-from app.sportoto_optimizer import serialize_sportoto_week
+from app.sportoto_engine import serialize_sportoto_week
 
 logger = logging.getLogger("fikstra.telegram")
 
@@ -1277,7 +1277,7 @@ def dispatch_sportoto_week(db: Session, week_id: int) -> dict[str, Any]:
         )
 
     text = "\n".join(lines)
-    markup = _inline_link_markup("Spor Toto 15'liyi İncele", "/?tab=coupons&view=sportoto")
+    markup = _inline_link_markup("Fikstra Toto'da İncele", "/?tab=toto")
     chat_id = settings.telegram_chat_id.strip()
     thread_id = _parse_topic_id(settings.telegram_topic_coupons)
     msg_id = _send_message(chat_id, text, thread_id=thread_id, reply_markup=markup)

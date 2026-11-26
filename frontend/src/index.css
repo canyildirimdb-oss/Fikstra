@@ -48,3 +48,30 @@
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+@keyframes totoShimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+.toto-shimmer-text {
+  background: linear-gradient(90deg, #00ff85 0%, #6ee7b7 35%, #ffffff 50%, #6ee7b7 65%, #00ff85 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: totoShimmer 3.6s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toto-shimmer-text {
+    animation: none;
+    background: none;
+    color: #00ff85;
+    text-shadow: 0 0 10px rgba(0, 255, 133, 0.45);
+  }
+}

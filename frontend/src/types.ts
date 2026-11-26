@@ -361,20 +361,86 @@ export interface SportotoPick {
   pick_code: string;
   pick_prob: number;
   kind: "single" | "double" | "triple";
+  locked?: boolean;
   hit: boolean | null;
+}
+
+export interface TotoProbs {
+  p15: number;
+  p14_plus: number;
+  p13_plus: number;
+  p12_plus: number;
+  expected_hits: number;
+}
+
+export interface TotoAdvice {
+  best_upgrade: {
+    slot_no: number;
+    home_team: string;
+    away_team: string;
+    from_code: string;
+    to_code: string;
+    gain_prob_pct: number;
+    cost_multiplier: string;
+  } | null;
+  safest_downgrade: {
+    slot_no: number;
+    home_team: string;
+    away_team: string;
+    from_code: string;
+    to_code: string;
+    loss_prob_pct: number;
+  } | null;
+}
+
+export interface TotoSurvival {
+  settled_count: number;
+  settled_hits: number;
+  settled_misses: number;
+  remaining_count: number;
+  can_hit_15: boolean;
+  can_hit_14: boolean;
+  can_hit_13: boolean;
+  can_hit_12: boolean;
+  p15_live: number;
+  p14_live: number;
+  p13_live: number;
+  p12_live: number;
 }
 
 export interface SportotoPlan {
   budget: number;
+  mode?: "hit15" | "shield13" | "contrarian";
   used_columns: number;
+  estimated_cost?: number;
   single_count: number;
   double_count: number;
   triple_count: number;
   expected_hits: number;
   full_hit_prob_pct: number;
+  probs?: TotoProbs;
   settled_count: number;
   hits: number | null;
   picks: SportotoPick[];
+  advice?: TotoAdvice;
+  survival?: TotoSurvival | null;
+}
+
+export interface TotoChaos {
+  score: number;
+  label: "Demir Banko" | "Kırılma Maçı" | "Mayın Tarlası";
+}
+
+export interface TotoTrapSignal {
+  is_trap: boolean;
+  fav_pick: "1" | "X" | "2";
+  fav_public_pct: number;
+  fav_true_pct: number;
+  leverage_1: number;
+  leverage_x: number;
+  leverage_2: number;
+  max_leverage: number;
+  explanation: string | null;
 }
 
 export interface SportotoMatchItem {
@@ -390,6 +456,11 @@ export interface SportotoMatchItem {
   prob_1: number | null;
   prob_x: number | null;
   prob_2: number | null;
+  public_pct_1: number | null;
+  public_pct_x: number | null;
+  public_pct_2: number | null;
+  chaos?: TotoChaos | null;
+  trap_signal?: TotoTrapSignal | null;
   actual_result: "1" | "X" | "2" | null;
 }
 
@@ -397,12 +468,32 @@ export interface SportotoWeekData {
   id: number;
   title: string;
   status: "DRAFT" | "PUBLISHED" | "SETTLED";
+  column_price: number;
   published_at: string | null;
   created_at: string | null;
   missing_count: number;
   missing_slots: number[];
   matches: SportotoMatchItem[];
   plans: Record<"16" | "32" | "64", SportotoPlan> | null;
+}
+
+export interface SavedTotoSlip {
+  id: string;
+  week_id: number;
+  week_title: string;
+  created_at: string;
+  picks: Record<number, string>;
+  columns: number;
+  estimated_cost: number;
+}
+
+export interface NotificationItem {
+  id: number;
+  title: string;
+  body: string;
+  category: string;
+  url: string;
+  sent_at: string | null;
 }
 
 export interface SportotoCurrentResponse {
