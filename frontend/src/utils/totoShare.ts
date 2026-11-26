@@ -7,9 +7,12 @@ export async function generateTotoPngBlob(params: {
   picksBySlot: Record<number, string>;
   columns: number;
   estimatedCost: number;
+  singles: number;
+  doubles: number;
+  triples: number;
   probs: TotoProbs;
 }): Promise<Blob> {
-  const { title, matches, picksBySlot, columns, estimatedCost, probs } = params;
+  const { title, matches, picksBySlot, columns, estimatedCost, singles, doubles, triples, probs } = params;
   const logoImg = await loadOfficialLogoMark();
   const width = 1080;
   const rowH = 54;
@@ -47,10 +50,10 @@ export async function generateTotoPngBlob(params: {
   ctx.strokeRect(48, 122, width - 96, 48);
 
   ctx.fillStyle = "#00FF85";
-  ctx.font = "700 20px Inter, system-ui, sans-serif";
+  ctx.font = "700 19px Inter, system-ui, sans-serif";
   ctx.fillText(
-    `${columns} Kolon (${estimatedCost.toFixed(0)} ₺)   •   Beklenen: ${probs.expected_hits.toFixed(1)}/15   •   13+: %${probs.p13_plus.toFixed(1)}   •   15/15: %${probs.p15.toFixed(3)}`,
-    68,
+    `${columns} Kolon (${estimatedCost.toFixed(0)} ₺)  •  ${singles} Tek · ${doubles} Çifte · ${triples} Kapalı  •  Beklenen: ${probs.expected_hits.toFixed(1)}/15  •  13+: %${probs.p13_plus.toFixed(1)}`,
+    64,
     153
   );
 

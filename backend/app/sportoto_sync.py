@@ -134,11 +134,24 @@ def _parse_iddaa_sportoto_payload(payload: dict[str, Any], source_name: str = "i
             }
         )
 
+    col_price = 10.0
+    for price_key in ("columnPrice", "unitPrice", "columnAmount", "ticketPrice", "price"):
+        raw_price = data.get(price_key)
+        if raw_price is not None:
+            try:
+                f_price = float(raw_price)
+                if f_price > 0.0:
+                    col_price = f_price
+                    break
+            except (TypeError, ValueError):
+                pass
+
     return {
         "source": source_name,
         "external_id": f"iddaa:{cycle_no}",
         "cycle_no": int(cycle_no),
         "title": f"{cycle_no}. Hafta",
+        "column_price": col_price,
         "events": parsed_events,
     }
 
@@ -389,16 +402,19 @@ def sync_sportoto_auto(db: Session, *, trigger_notifications: bool = True) -> di
         .first()
     )
     created = False
+    bulletin_col_price = float(bulletin.get("column_price") or 10.0)
     if not week:
         week = SportotoWeek(
             external_id=ext_id,
             title=bulletin["title"][:120],
             status="DRAFT",
-            column_price=10.0,
+            column_price=bulletin_col_price,
         )
         db.add(week)
         db.flush()
         created = True
+    elif week.status != "SETTLED" and bulletin.get("column_price"):
+        week.column_price = bulletin_col_price
 
     existing_by_slot = {m.slot_no: m for m in week.matches}
     model_count = 0

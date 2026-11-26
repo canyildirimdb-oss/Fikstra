@@ -448,9 +448,11 @@ export interface SportotoPlan {
   survival?: TotoSurvival | null;
 }
 
+export type TotoRiskLabel = "Banko" | "Favori" | "Ortada" | "Sürprize Açık";
+
 export interface TotoChaos {
   score: number;
-  label: "Banko" | "Dengeli" | "Çok Riskli";
+  label: TotoRiskLabel | string;
 }
 
 export interface TotoTrapSignal {
@@ -471,6 +473,7 @@ export interface SportotoMatchItem {
   home_team: string;
   away_team: string;
   prediction_id: number | null;
+  match_id?: number | null;
   source: "fikstra_model" | "market_devig" | "missing";
   odd_1: number | null;
   odd_x: number | null;

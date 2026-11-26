@@ -742,6 +742,7 @@ export function App() {
             initialSlipParam={totoSlipParam}
             onConsumeSlipParam={() => setTotoSlipParam(null)}
             refreshTrigger={refreshTrigger}
+            onSelectMatch={(matchId, isSettled) => setSelectedMatch({ matchId, isSettled })}
           />
         )}
         {tab === "performance" && (

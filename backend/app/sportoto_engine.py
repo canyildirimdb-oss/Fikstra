@@ -50,18 +50,21 @@ def pick_prob_for_code(p1: float, px: float, p2: float, code: str) -> float:
 
 
 def compute_chaos_score(p1: float, px: float, p2: float) -> dict[str, Any]:
-    """Normalized Shannon entropy (0-100) + human-readable volatility label."""
+    """Normalized Shannon entropy (0-100) + calibrated 4-tier volatility label based on max_p."""
     entropy = 0.0
     for p in (p1, px, p2):
         if p > 1e-12:
             entropy -= p * math.log(p)
     score = round(min(100.0, max(0.0, (entropy / math.log(3.0)) * 100.0)), 1)
-    if score <= 35.0:
+    max_p = max(float(p1), float(px), float(p2))
+    if max_p >= 0.65:
         label = "Banko"
-    elif score <= 70.0:
-        label = "Dengeli"
+    elif max_p >= 0.50:
+        label = "Favori"
+    elif max_p >= 0.42:
+        label = "Ortada"
     else:
-        label = "Çok Riskli"
+        label = "Sürprize Açık"
     return {"score": score, "label": label}
 
 
@@ -71,6 +74,7 @@ def compute_trap_signal(
 ) -> Optional[dict[str, Any]]:
     """
     Compute pool leverage & trap favorite ONLY when all 3 real public percentages are present (>0, ~100 sum).
+    Requires fragile favorite (<62% true prob), heavy public load (>=68%), and >=14pt gap.
     Returns None otherwise (zero fake data).
     """
     if any(v is None or float(v) <= 0.0 for v in public_pcts):
@@ -86,7 +90,11 @@ def compute_trap_signal(
     labels = ("1", "X", "2")
     fav_idx = max(range(3), key=lambda i: pub[i])
     over_loaded = pub[fav_idx] - true_pcts[fav_idx]
-    is_trap = pub[fav_idx] >= 65.0 and over_loaded >= 12.0
+    is_trap = (
+        true_pcts[fav_idx] < 62.0
+        and pub[fav_idx] >= 68.0
+        and over_loaded >= 14.0
+    )
     explanation = (
         f"Halkın %{pub[fav_idx]:.0f}'i {labels[fav_idx]} bekliyor ama gerçek ihtimal %{true_pcts[fav_idx]:.0f}."
         if is_trap
@@ -192,8 +200,12 @@ def compute_live_survival(matches: list[dict[str, Any]], picks: list[dict[str, A
 def _best_options_for_match(p1: float, px: float, p2: float) -> dict[int, tuple[str, float, str]]:
     singles = [("1", p1), ("X", px), ("2", p2)]
     bs = max(singles, key=lambda x: x[1])
-    doubles = [("1X", p1 + px), ("12", p1 + p2), ("X2", px + p2)]
-    bd = max(doubles, key=lambda x: x[1])
+    p1x, px2, p12 = p1 + px, px + p2, p1 + p2
+    best_draw_double = ("1X", p1x) if p1x >= px2 else ("X2", px2)
+    if p12 - best_draw_double[1] <= 0.015:
+        bd = best_draw_double
+    else:
+        bd = ("12", p12)
     return {
         1: (bs[0], float(bs[1]), "single"),
         2: (bd[0], float(min(1.0, bd[1])), "double"),
@@ -322,35 +334,46 @@ def optimize_toto(
             f"Kilitli maçların kolon çarpımı ({locked_cols}) seçilen bütçeyi ({budget}) aşıyor"
         )
 
-    # Exact DP over remaining/total columns <= budget
-    dp: dict[int, tuple[float, tuple[tuple[int, str, float, str], ...]]] = {1: (0.0, ())}
-    for choices in per_match_choices:
-        next_dp: dict[int, tuple[float, tuple[tuple[int, str, float, str], ...]]] = {}
-        for cols, (sc_sum, path) in dp.items():
-            for k, code, prob, score, kind in choices:
-                nc = cols * k
-                if nc > budget:
-                    continue
-                new_sc = sc_sum + score
-                prev = next_dp.get(nc)
-                if prev is None or new_sc > prev[0] + 1e-12:
-                    next_dp[nc] = (new_sc, path + ((k, code, prob, kind),))
-        dp = next_dp
+    def _solve_dp_for_budget(target_budget: int) -> tuple[int, list[tuple[int, str, float, str]]]:
+        dp: dict[int, tuple[float, tuple[tuple[int, str, float, str], ...]]] = {1: (0.0, ())}
+        for choices in per_match_choices:
+            next_dp: dict[int, tuple[float, tuple[tuple[int, str, float, str], ...]]] = {}
+            for cols, (sc_sum, path) in dp.items():
+                for k, code, prob, score, kind in choices:
+                    nc = cols * k
+                    if nc > target_budget:
+                        continue
+                    new_sc = sc_sum + score
+                    prev = next_dp.get(nc)
+                    if prev is None or new_sc > prev[0] + 1e-12:
+                        next_dp[nc] = (new_sc, path + ((k, code, prob, kind),))
+            dp = next_dp
+        if not dp:
+            raise ValueError("Seçilen bütçe için geçerli kolon dağılımı bulunamadı")
+        b_cols, (_, b_path) = max(dp.items(), key=lambda item: (round(item[1][0], 11), -item[0]))
+        return b_cols, list(b_path)
 
-    if not dp:
-        raise ValueError("Seçilen bütçe için geçerli kolon dağılımı bulunamadı")
+    def _metrics_for_path(path_list: list[tuple[int, str, float, str]]) -> dict[str, float]:
+        return exact_poisson_binomial([x[2] for x in path_list])
 
-    best_cols, (_, best_path) = max(dp.items(), key=lambda item: (round(item[1][0], 11), -item[0]))
-    chosen = list(best_path)
+    def _is_monotone_ge(cand_m: dict[str, float], base_m: dict[str, float]) -> bool:
+        return (
+            cand_m["expected_hits"] >= base_m["expected_hits"] - 1e-9
+            and cand_m["p15"] >= base_m["p15"] - 1e-9
+            and cand_m["p14_plus"] >= base_m["p14_plus"] - 1e-9
+            and cand_m["p13_plus"] >= base_m["p13_plus"] - 1e-9
+        )
 
-    # Deterministic 13+ Shield refinement respecting locks & budget
-    if mode == "shield13":
-        def eval_shield(path_list: list[tuple[int, str, float, str]]) -> tuple[float, float]:
-            pb = exact_poisson_binomial([x[2] for x in path_list])
-            return (pb["p13_plus"], pb["p14_plus"])
-
-        cur_score = eval_shield(chosen)
-        cur_cols = best_cols
+    def _refine_shield13(
+        init_cols: int,
+        init_path: list[tuple[int, str, float, str]],
+        target_budget: int,
+        floor_metrics: Optional[dict[str, float]] = None,
+    ) -> tuple[int, list[tuple[int, str, float, str]]]:
+        cur_chosen = list(init_path)
+        cur_cols = init_cols
+        cur_pb = _metrics_for_path(cur_chosen)
+        cur_score = (cur_pb["p13_plus"], cur_pb["p14_plus"])
         improved = True
         while improved:
             improved = False
@@ -358,25 +381,24 @@ def optimize_toto(
                 slot_i = int(ordered[i]["slot_no"])
                 if slot_i in clean_locks:
                     continue
-                ki, _, _, _ = chosen[i]
-                # Try direct upgrade if budget allows
+                ki, _, _, _ = cur_chosen[i]
                 for k_new, c_new, p_new, _, kind_new in per_match_choices[i]:
                     if k_new == ki:
                         continue
                     new_cols = (cur_cols // ki) * k_new
-                    if new_cols <= budget:
-                        cand = list(chosen)
+                    if new_cols <= target_budget:
+                        cand = list(cur_chosen)
                         cand[i] = (k_new, c_new, p_new, kind_new)
-                        cand_sc = eval_shield(cand)
-                        if cand_sc > cur_score:
-                            chosen = cand
+                        cand_pb = _metrics_for_path(cand)
+                        cand_sc = (cand_pb["p13_plus"], cand_pb["p14_plus"])
+                        if cand_sc > cur_score and (floor_metrics is None or _is_monotone_ge(cand_pb, floor_metrics)):
+                            cur_chosen = cand
                             cur_cols = new_cols
                             cur_score = cand_sc
                             improved = True
                             break
                 if improved:
                     break
-                # Try swap: downgrade i, upgrade j
                 if ki > 1:
                     for k_down, c_down, p_down, _, kind_down in per_match_choices[i]:
                         if k_down >= ki:
@@ -384,18 +406,21 @@ def optimize_toto(
                         for j in range(len(ordered)):
                             if i == j or int(ordered[j]["slot_no"]) in clean_locks:
                                 continue
-                            kj = chosen[j][0]
+                            kj = cur_chosen[j][0]
                             for k_up, c_up, p_up, _, kind_up in per_match_choices[j]:
                                 if k_up <= kj:
                                     continue
                                 new_cols = (cur_cols // (ki * kj)) * (k_down * k_up)
-                                if new_cols <= budget:
-                                    cand = list(chosen)
+                                if new_cols <= target_budget:
+                                    cand = list(cur_chosen)
                                     cand[i] = (k_down, c_down, p_down, kind_down)
                                     cand[j] = (k_up, c_up, p_up, kind_up)
-                                    cand_sc = eval_shield(cand)
-                                    if cand_sc > cur_score:
-                                        chosen = cand
+                                    cand_pb = _metrics_for_path(cand)
+                                    cand_sc = (cand_pb["p13_plus"], cand_pb["p14_plus"])
+                                    if cand_sc > cur_score and (
+                                        floor_metrics is None or _is_monotone_ge(cand_pb, floor_metrics)
+                                    ):
+                                        cur_chosen = cand
                                         cur_cols = new_cols
                                         cur_score = cand_sc
                                         improved = True
@@ -406,7 +431,64 @@ def optimize_toto(
                             break
                     if improved:
                         break
-        best_cols = cur_cols
+        return cur_cols, cur_chosen
+
+    def _upgrade_from_prev(
+        prev_cols: int,
+        prev_path: list[tuple[int, str, float, str]],
+        target_budget: int,
+    ) -> tuple[int, list[tuple[int, str, float, str]]]:
+        cur_chosen = list(prev_path)
+        cur_cols = prev_cols
+        while True:
+            best_gain = -1e18
+            best_move: Optional[tuple[int, int, tuple[int, str, float, str]]] = None
+            for i in range(len(ordered)):
+                if int(ordered[i]["slot_no"]) in clean_locks:
+                    continue
+                ki, _, cur_p, _ = cur_chosen[i]
+                cur_sc = next((sc for k, _, _, sc, _ in per_match_choices[i] if k == ki), math.log(max(cur_p, 1e-12)))
+                for k_new, c_new, p_new, sc_new, kind_new in per_match_choices[i]:
+                    if k_new <= ki:
+                        continue
+                    new_cols = (cur_cols // ki) * k_new
+                    if new_cols <= target_budget:
+                        gain = (sc_new - cur_sc) / max(1, new_cols - cur_cols)
+                        if gain > best_gain:
+                            best_gain = gain
+                            best_move = (i, new_cols, (k_new, c_new, p_new, kind_new))
+            if best_move is None:
+                break
+            idx_m, nc_m, tpl_m = best_move
+            cur_chosen[idx_m] = tpl_m
+            cur_cols = nc_m
+        return cur_cols, cur_chosen
+
+    # Enforce strict monotonicity across standard tiers (16 -> 32 -> 64 -> 128 -> 256) up to budget
+    tier_chain = [b for b in (16, 32, 64, 128, 256) if locked_cols <= b < budget] + [budget]
+    prev_cols: Optional[int] = None
+    prev_chosen: Optional[list[tuple[int, str, float, str]]] = None
+    prev_metrics: Optional[dict[str, float]] = None
+
+    for tier_b in tier_chain:
+        b_cols, b_chosen = _solve_dp_for_budget(tier_b)
+        if mode == "shield13":
+            b_cols, b_chosen = _refine_shield13(b_cols, b_chosen, tier_b, floor_metrics=prev_metrics)
+        b_metrics = _metrics_for_path(b_chosen)
+
+        if prev_metrics is not None and prev_chosen is not None and prev_cols is not None:
+            if not _is_monotone_ge(b_metrics, prev_metrics):
+                up_cols, up_chosen = _upgrade_from_prev(prev_cols, prev_chosen, tier_b)
+                if mode == "shield13":
+                    up_cols, up_chosen = _refine_shield13(up_cols, up_chosen, tier_b, floor_metrics=prev_metrics)
+                b_cols, b_chosen = up_cols, up_chosen
+                b_metrics = _metrics_for_path(b_chosen)
+
+        prev_cols, prev_chosen, prev_metrics = b_cols, b_chosen, b_metrics
+
+    assert prev_cols is not None and prev_chosen is not None
+    best_cols = prev_cols
+    chosen = prev_chosen
 
     picks: list[dict[str, Any]] = []
     single_count = double_count = triple_count = 0
@@ -670,6 +752,15 @@ def match_and_create_sportoto_week(
 
 def serialize_sportoto_week(week: SportotoWeek, include_plans: bool = True) -> dict[str, Any]:
     ordered = sorted(week.matches, key=lambda m: m.slot_no)
+    pred_ids = [m.prediction_id for m in ordered if m.prediction_id]
+    match_id_by_pred: dict[int, int] = {}
+    if pred_ids:
+        from sqlalchemy.orm import object_session
+        sess = object_session(week)
+        if sess is not None:
+            rows = sess.query(Prediction.id, Prediction.match_id).filter(Prediction.id.in_(pred_ids)).all()
+            match_id_by_pred = {int(pid): int(mid) for pid, mid in rows}
+
     matches_payload: list[dict[str, Any]] = []
     for m in ordered:
         chaos = (
@@ -692,6 +783,7 @@ def serialize_sportoto_week(week: SportotoWeek, include_plans: bool = True) -> d
                 "home_team": m.home_team,
                 "away_team": m.away_team,
                 "prediction_id": m.prediction_id,
+                "match_id": match_id_by_pred.get(m.prediction_id) if m.prediction_id else None,
                 "source": m.source,
                 "odd_1": m.odd_1,
                 "odd_x": m.odd_x,

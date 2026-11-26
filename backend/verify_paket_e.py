@@ -24,6 +24,7 @@ from app.database import Base, get_db
 from app.main import app
 from app.models import Coupon, CouponItem, Match, Prediction
 from app.sportoto_engine import (
+    compute_chaos_score,
     compute_live_survival,
     compute_trap_signal,
     devig_1x2,
@@ -534,6 +535,100 @@ def test_recent_matches_accuracy():
     print("TEST_RECENT_MATCHES_ACCURACY: PASS")
 
 
+def test_pe5_monotonicity_and_ties():
+    matches = [
+        {"slot_no": 1, "home_team": "Arsenal", "away_team": "City", "prob_1": 0.48, "prob_x": 0.255, "prob_2": 0.265},
+        {"slot_no": 2, "home_team": "Alanya", "away_team": "Konya", "prob_1": 0.37, "prob_x": 0.29, "prob_2": 0.34},
+        {"slot_no": 3, "home_team": "Rize", "away_team": "Kasimpasa", "prob_1": 0.50, "prob_x": 0.25, "prob_2": 0.25},
+        {"slot_no": 4, "home_team": "Samsun", "away_team": "Gencler", "prob_1": 0.50, "prob_x": 0.26, "prob_2": 0.24},
+        {"slot_no": 5, "home_team": "Gaziantep", "away_team": "Amed", "prob_1": 0.28, "prob_x": 0.26, "prob_2": 0.46},
+        {"slot_no": 6, "home_team": "Corum", "away_team": "Kocaeli", "prob_1": 0.49, "prob_x": 0.27, "prob_2": 0.24},
+        {"slot_no": 7, "home_team": "Eyup", "away_team": "Basaksehir", "prob_1": 0.16, "prob_x": 0.20, "prob_2": 0.64},
+        {"slot_no": 8, "home_team": "Fenerbahce", "away_team": "Erzurum", "prob_1": 0.78, "prob_x": 0.14, "prob_2": 0.08},
+        {"slot_no": 9, "home_team": "Goztepe", "away_team": "Trabzon", "prob_1": 0.30, "prob_x": 0.25, "prob_2": 0.45},
+        {"slot_no": 10, "home_team": "Besiktas", "away_team": "Galatasaray", "prob_1": 0.46, "prob_x": 0.24, "prob_2": 0.30},
+        {"slot_no": 11, "home_team": "Freiburg", "away_team": "Leipzig", "prob_1": 0.35, "prob_x": 0.25, "prob_2": 0.40},
+        {"slot_no": 12, "home_team": "Dortmund", "away_team": "Leverkusen", "prob_1": 0.45, "prob_x": 0.24, "prob_2": 0.31, "public_pct_1": 69.0, "public_pct_x": 18.0, "public_pct_2": 13.0},
+        {"slot_no": 13, "home_team": "Lyon", "away_team": "Monaco", "prob_1": 0.40, "prob_x": 0.28, "prob_2": 0.32},
+        {"slot_no": 14, "home_team": "Everton", "away_team": "Liverpool", "prob_1": 0.22, "prob_x": 0.25, "prob_2": 0.53},
+        {"slot_no": 15, "home_team": "Sociedad", "away_team": "Sevilla", "prob_1": 0.45, "prob_x": 0.27, "prob_2": 0.28},
+    ]
+
+    for mode in ("hit15", "shield13", "contrarian"):
+        prev = None
+        for b in (16, 32, 64, 128):
+            plan = optimize_toto(matches, budget=b, mode=mode)
+            if prev is not None:
+                assert plan["expected_hits"] >= prev["expected_hits"], f"{mode} b={b} exp decreased"
+                assert plan["probs"]["p15"] >= prev["probs"]["p15"], f"{mode} b={b} p15 decreased"
+                assert plan["probs"]["p14_plus"] >= prev["probs"]["p14_plus"], f"{mode} b={b} p14 decreased"
+                assert plan["probs"]["p13_plus"] >= prev["probs"]["p13_plus"], f"{mode} b={b} p13 decreased"
+            prev = plan
+
+    # Slot 1 has 12=0.745 vs 1X=0.735 (diff 0.010 <= 0.015) -> must prefer 1X over 12 when doubled
+    p64 = optimize_toto(matches, budget=64, mode="hit15", locks={1: "1X"})
+    p_ars = optimize_toto(matches, budget=128, mode="hit15")
+    ars_pick = next(pk for pk in p_ars["picks"] if pk["slot_no"] == 1)
+    assert ars_pick["pick_code"] != "12", f"Expected 1X instead of 12 on <=1.5% tie, got {ars_pick['pick_code']}"
+    assert p64["used_columns"] <= 64
+
+    print("TEST_PE5_MONOTONICITY_AND_TIES: PASS")
+
+
+def test_pe6_calibrated_labels_and_history():
+    # Calibrated 4-tier labels
+    assert compute_chaos_score(0.78, 0.14, 0.08)["label"] == "Banko"
+    assert compute_chaos_score(0.58, 0.24, 0.18)["label"] == "Favori"
+    assert compute_chaos_score(0.46, 0.27, 0.27)["label"] == "Ortada"
+    assert compute_chaos_score(0.38, 0.32, 0.30)["label"] == "Sürprize Açık"
+
+    # 78% favorite with 97% public load is NOT a trap
+    fb_trap = compute_trap_signal((0.78, 0.14, 0.08), (97.0, 2.0, 1.0))
+    assert fb_trap is not None and fb_trap["is_trap"] is False
+
+    # 45% favorite with 69% public load IS a trap (<62% true, >=68% pub, >=14pt gap)
+    bvb_trap = compute_trap_signal((0.45, 0.24, 0.31), (69.0, 18.0, 13.0))
+    assert bvb_trap is not None and bvb_trap["is_trap"] is True
+
+    # Active PUBLISHED week must NOT appear in /api/sportoto/history; SETTLED week MUST appear
+    SessionLocal = _make_test_session()
+
+    def override_get_db():
+        s = SessionLocal()
+        try:
+            yield s
+        finally:
+            s.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        with TestClient(app) as client:
+            lines = [f"{i}. Ev{i} - Dep{i} | 1.90 3.40 3.90" for i in range(1, 16)]
+            w = client.post(
+                "/api/admin/sportoto/parse",
+                headers=HEADERS,
+                json={"title": "370. Hafta", "raw_text": "\n".join(lines)},
+            ).json()
+            client.post(f"/api/admin/sportoto/weeks/{w['id']}/publish", headers=HEADERS)
+
+            hist_pub = client.get("/api/sportoto/history").json()
+            assert hist_pub["items"] == [], f"PUBLISHED week leaked into history: {hist_pub['items']}"
+
+            # Settle all 15 matches -> moves to SETTLED -> appears in history
+            client.patch(
+                f"/api/admin/sportoto/weeks/{w['id']}/matches",
+                headers=HEADERS,
+                json={"matches": [{"slot_no": i, "actual_result": "1"} for i in range(1, 16)]},
+            )
+            hist_settled = client.get("/api/sportoto/history").json()
+            assert len(hist_settled["items"]) == 1
+            assert hist_settled["items"][0]["status"] == "SETTLED"
+    finally:
+        app.dependency_overrides.clear()
+
+    print("TEST_PE6_CALIBRATED_LABELS_AND_HISTORY: PASS")
+
+
 if __name__ == "__main__":
     p1, px, p2 = devig_1x2(2.0, 3.5, 3.8)
     assert abs((p1 + px + p2) - 1.0) < 1e-9
@@ -543,4 +638,6 @@ if __name__ == "__main__":
     test_pe4_human_readable_notifications()
     test_perf_transparency()
     test_recent_matches_accuracy()
+    test_pe5_monotonicity_and_ties()
+    test_pe6_calibrated_labels_and_history()
     print("ALL PAKET E TESTS PASSED")

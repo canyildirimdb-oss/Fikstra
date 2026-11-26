@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  ArrowUpRight,
   BookmarkPlus,
   Check,
+  CheckCircle2,
   Copy,
   Image as ImageIcon,
   Link2,
   Lock,
+  RotateCcw,
   Send,
   Shield,
   Sparkles,
@@ -23,15 +26,16 @@ import type {
 } from "../types";
 import {
   canonicalPickCode,
+  computeCouponCheck,
   computeLiveSurvival,
-  computeMarginalAdvice,
   exactPoissonBinomial,
+  getMatchRiskLabel,
   pickProbForCode,
 } from "../utils/totoMath";
 import { generateTotoPngBlob } from "../utils/totoShare";
 
 const SAVED_TOTO_KEY = "fikstra_saved_toto_v1";
-const BUDGET_OPTIONS = [16, 32, 48, 64, 96, 128, 256] as const;
+const BUDGET_OPTIONS = [8, 16, 32, 48, 64, 96, 128, 256] as const;
 
 const MODES: { key: "hit15" | "shield13" | "contrarian"; label: string; desc: string }[] = [
   { key: "hit15", label: "15'li Hedef", desc: "Maksimum 15/15 olasılığı" },
@@ -44,6 +48,7 @@ interface Props {
   initialSlipParam: string | null;
   onConsumeSlipParam: () => void;
   refreshTrigger: number;
+  onSelectMatch?: (matchId: number, isSettled?: boolean) => void;
 }
 
 export function FikstraTotoPage({
@@ -51,6 +56,7 @@ export function FikstraTotoPage({
   initialSlipParam,
   onConsumeSlipParam,
   refreshTrigger,
+  onSelectMatch,
 }: Props) {
   const [current, setCurrent] = useState<SportotoCurrentResponse | null>(null);
   const [history, setHistory] = useState<SportotoHistoryItem[]>([]);
@@ -60,6 +66,7 @@ export function FikstraTotoPage({
   const [mode, setMode] = useState<"hit15" | "shield13" | "contrarian">("hit15");
   const [picksBySlot, setPicksBySlot] = useState<Record<number, string>>({});
   const [lockedSlots, setLockedSlots] = useState<Record<number, boolean>>({});
+  const [baselinePicks, setBaselinePicks] = useState<Record<number, string>>({});
   const [optimizing, setOptimizing] = useState(false);
   const [optError, setOptError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -94,11 +101,17 @@ export function FikstraTotoPage({
       .then(([cur, hist]) => {
         if (cancelled) return;
         setCurrent(cur);
-        setHistory(hist.items || []);
+        setHistory((hist.items || []).filter((h) => h.status === "SETTLED"));
 
         if (cur.active && cur.week) {
           const defaultPlan = cur.week.plans?.["32"] || cur.week.plans?.["16"];
           const nextPicks: Record<number, string> = {};
+          const planBaseline: Record<number, string> = {};
+          if (defaultPlan) {
+            for (const pk of defaultPlan.picks) {
+              planBaseline[pk.slot_no] = pk.pick_code;
+            }
+          }
           if (initialSlipParam) {
             const parts = initialSlipParam.split(",").map((s) => s.trim());
             cur.week.matches.forEach((m, idx) => {
@@ -106,14 +119,13 @@ export function FikstraTotoPage({
             });
             onConsumeSlipParam();
           } else if (defaultPlan) {
-            for (const pk of defaultPlan.picks) {
-              nextPicks[pk.slot_no] = pk.pick_code;
-            }
+            Object.assign(nextPicks, planBaseline);
           } else {
             for (const m of cur.week.matches) {
               nextPicks[m.slot_no] = "1";
             }
           }
+          setBaselinePicks(planBaseline);
           setPicksBySlot(nextPicks);
         }
       })
@@ -133,7 +145,7 @@ export function FikstraTotoPage({
 
   const week = current?.active ? current.week : null;
 
-  // Live client-side calculations
+  // Single source of truth: 100% live from active picksBySlot & lockedSlots
   const liveStats = useMemo(() => {
     if (!week || week.matches.length === 0) return null;
     let cols = 1;
@@ -153,7 +165,7 @@ export function FikstraTotoPage({
     }
 
     const probs = exactPoissonBinomial(pickProbs);
-    const advice = computeMarginalAdvice(week.matches, picksBySlot);
+    const couponCheck = computeCouponCheck(week.matches, picksBySlot, lockedSlots, cols, probs);
     const survival = computeLiveSurvival(week.matches, picksBySlot);
     const colPrice = week.column_price || 10;
     return {
@@ -163,16 +175,77 @@ export function FikstraTotoPage({
       doubles,
       triples,
       probs,
-      advice,
+      couponCheck,
       survival,
     };
-  }, [week, picksBySlot]);
+  }, [week, picksBySlot, lockedSlots]);
+
+  const hasLocksOrManualEdits = useMemo(() => {
+    if (!week) return false;
+    if (Object.values(lockedSlots).some(Boolean)) return true;
+    return week.matches.some(
+      (m) =>
+        baselinePicks[m.slot_no] &&
+        canonicalPickCode(picksBySlot[m.slot_no] || "1") !== baselinePicks[m.slot_no]
+    );
+  }, [week, lockedSlots, picksBySlot, baselinePicks]);
+
+  const distributeBudget = async (
+    nextBudget: number,
+    nextMode: "hit15" | "shield13" | "contrarian",
+    overrideLocks?: Record<number, boolean>
+  ) => {
+    if (!week) return;
+    setOptimizing(true);
+    setOptError(null);
+    const activeLocks = overrideLocks ?? lockedSlots;
+    try {
+      const locksPayload: Record<number, string> = {};
+      for (const m of week.matches) {
+        if (activeLocks[m.slot_no]) {
+          locksPayload[m.slot_no] = canonicalPickCode(picksBySlot[m.slot_no] || "1");
+        }
+      }
+      const plan = await api.optimizeSportoto({
+        week_id: week.id,
+        budget: nextBudget,
+        mode: nextMode,
+        locks: locksPayload,
+      });
+      const nextPicks: Record<number, string> = {};
+      for (const pk of plan.picks) {
+        nextPicks[pk.slot_no] = pk.pick_code;
+      }
+      setPicksBySlot(nextPicks);
+      setBaselinePicks(nextPicks);
+    } catch (e) {
+      setOptError(e instanceof Error ? e.message : "Optimizasyon hatası");
+    } finally {
+      setOptimizing(false);
+    }
+  };
+
+  const handleSelectBudget = (b: number) => {
+    setBudget(b);
+    void distributeBudget(b, mode);
+  };
+
+  const handleSelectMode = (mKey: "hit15" | "shield13" | "contrarian") => {
+    setMode(mKey);
+    void distributeBudget(budget, mKey);
+  };
+
+  const handleResetLocks = () => {
+    setLockedSlots({});
+    void distributeBudget(budget, mode, {});
+    showToast("Kilitler kaldırıldı ve kupon sıfırlandı");
+  };
 
   const toggleOutcome = (slotNo: number, outcome: "1" | "X" | "2") => {
     setPicksBySlot((prev) => {
       const cur = canonicalPickCode(prev[slotNo] || "1");
       const has = cur.includes(outcome);
-      if (has && cur.length === 1) return prev; // Keep at least 1 selection
+      if (has && cur.length === 1) return prev;
       const nextSet = new Set(cur.split(""));
       if (has) nextSet.delete(outcome);
       else nextSet.add(outcome);
@@ -183,36 +256,6 @@ export function FikstraTotoPage({
 
   const toggleLock = (slotNo: number) => {
     setLockedSlots((prev) => ({ ...prev, [slotNo]: !prev[slotNo] }));
-  };
-
-  const handleDistributeBudget = async () => {
-    if (!week) return;
-    setOptimizing(true);
-    setOptError(null);
-    try {
-      const locksPayload: Record<number, string> = {};
-      for (const m of week.matches) {
-        if (lockedSlots[m.slot_no]) {
-          locksPayload[m.slot_no] = canonicalPickCode(picksBySlot[m.slot_no] || "1");
-        }
-      }
-      const plan = await api.optimizeSportoto({
-        week_id: week.id,
-        budget,
-        mode,
-        locks: locksPayload,
-      });
-      const nextPicks: Record<number, string> = {};
-      for (const pk of plan.picks) {
-        nextPicks[pk.slot_no] = pk.pick_code;
-      }
-      setPicksBySlot(nextPicks);
-      showToast(`${plan.used_columns} kolonluk şablon uygulandı`);
-    } catch (e) {
-      setOptError(e instanceof Error ? e.message : "Optimizasyon hatası");
-    } finally {
-      setOptimizing(false);
-    }
   };
 
   const handleSaveToto = () => {
@@ -242,12 +285,14 @@ export function FikstraTotoPage({
     if (!week || !liveStats) return;
     const lines = [
       `FİKSTRA TOTO — ${week.title} (${liveStats.columns} Kolon · ${liveStats.estimatedCost.toFixed(0)} ₺)`,
+      `${liveStats.singles} Tek · ${liveStats.doubles} Çifte · ${liveStats.triples} Kapalı`,
       "",
       ...week.matches.map(
-        (m) => `${String(m.slot_no).padStart(2, "0")}. ${m.home_team} - ${m.away_team} -> ${picksBySlot[m.slot_no] || "1"}`
+        (m) =>
+          `${String(m.slot_no).padStart(2, "0")}. ${m.home_team} - ${m.away_team} -> ${picksBySlot[m.slot_no] || "1"}`
       ),
       "",
-      `Beklenen İsabet: ${liveStats.probs.expected_hits.toFixed(1)}/15 · 13+: %${liveStats.probs.p13_plus.toFixed(1)}`,
+      `Beklenen Doğru: ${liveStats.probs.expected_hits.toFixed(1)}/15 · 13+: %${liveStats.probs.p13_plus.toFixed(1)}`,
     ];
     navigator.clipboard?.writeText(lines.join("\n"));
     showToast("Şablon metin olarak kopyalandı");
@@ -263,6 +308,9 @@ export function FikstraTotoPage({
         picksBySlot,
         columns: liveStats.columns,
         estimatedCost: liveStats.estimatedCost,
+        singles: liveStats.singles,
+        doubles: liveStats.doubles,
+        triples: liveStats.triples,
         probs: liveStats.probs,
       });
       const file = new File([blob], `fikstra-toto-${week.id}.png`, { type: "image/png" });
@@ -293,6 +341,8 @@ export function FikstraTotoPage({
     );
   }
 
+  const settledHistory = history.filter((h) => h.status === "SETTLED");
+
   return (
     <div className="space-y-4">
       {toast && (
@@ -304,7 +354,6 @@ export function FikstraTotoPage({
       )}
 
       {!week || !liveStats ? (
-        /* Honest Empty State Showcase */
         <div className="p-6 sm:p-8 rounded-3xl glass-card space-y-5 text-center">
           <img
             src="/logo-profile.png"
@@ -326,7 +375,7 @@ export function FikstraTotoPage({
               {
                 icon: Wand2,
                 title: "Akıllı Kolon Dağıtımı",
-                desc: "16–256 kolon bütçeni 15'li veya 13+ hedefine göre en verimli maçlara dağıt.",
+                desc: "8–256 kolon bütçeni 15'li veya 13+ hedefine göre en verimli maçlara dağıt.",
               },
               {
                 icon: Shield,
@@ -336,12 +385,12 @@ export function FikstraTotoPage({
               {
                 icon: AlertTriangle,
                 title: "Maç Risk Analizi",
-                desc: "Banko maçları, riskli karşılaşmaları ve fazla yüklenilen favorileri tek bakışta gör.",
+                desc: "Banko maçları, ortada karşılaşmaları ve halkın yüklendiği favorileri tek bakışta gör.",
               },
               {
                 icon: Sparkles,
-                title: "Hamle Danışmanı",
-                desc: "Bütçeni büyütürken en mantıklı çifte şansı, azaltırken en risksiz eksiltmeyi tek tıkla gör.",
+                title: "Canlı Kupon Kontrolü",
+                desc: "Aynı bütçede daha güçlü bir dağılım varsa tek tıkla iyileştir.",
               },
             ].map((f) => {
               const Icon = f.icon;
@@ -372,48 +421,56 @@ export function FikstraTotoPage({
         </div>
       ) : (
         <>
-          {/* Top Live HUD Cockpit */}
+          {/* Top Live Summary Strip */}
           <div className="p-4 rounded-2xl glass-card space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-[#00FF85]/15 text-[#00FF85] border border-[#00FF85]/35">
-                  FİKSTRA TOTO
-                </span>
-                <h2 className="text-sm sm:text-base font-extrabold text-white">{week.title}</h2>
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-[#00FF85]/15 text-[#00FF85] border border-[#00FF85]/35">
+                    FİKSTRA TOTO
+                  </span>
+                  <h2 className="text-sm sm:text-base font-extrabold text-white">{week.title}</h2>
+                </div>
+                {optimizing && (
+                  <span className="text-[11px] font-semibold text-[#00FF85] animate-pulse">
+                    Dağıtılıyor...
+                  </span>
+                )}
               </div>
-              <div className="flex items-center gap-2 mono-nums">
-                <span className="px-2.5 py-1 rounded-xl bg-[#05080D] border border-white/10 text-xs font-extrabold text-white">
-                  {liveStats.columns} Kolon
-                </span>
-                <span className="px-2.5 py-1 rounded-xl bg-[#00FF85]/15 border border-[#00FF85]/35 text-xs font-extrabold text-[#00FF85]">
-                  {liveStats.estimatedCost.toFixed(0)} ₺
-                </span>
-              </div>
+              <p className="text-[11px] sm:text-xs text-slate-400">
+                Güvendiğin maçları kilitle, kolon bütçeni seç; Fikstra çifte şansları en ortada maçlara otomatik dağıtsın.
+              </p>
             </div>
 
-            {/* 5 Live Counters */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-              {[
-                { label: "15/15", val: `%${liveStats.probs.p15.toFixed(3)}`, hi: true },
-                { label: "14+", val: `%${liveStats.probs.p14_plus.toFixed(2)}` },
-                { label: "13+", val: `%${liveStats.probs.p13_plus.toFixed(1)}` },
-                { label: "12+", val: `%${liveStats.probs.p12_plus.toFixed(1)}` },
-                { label: "Beklenen", val: `${liveStats.probs.expected_hits.toFixed(1)} / 15`, hi: true },
-              ].map((c) => (
-                <div
-                  key={c.label}
-                  className="px-3 py-2 rounded-xl bg-[#05080D]/80 border border-white/10"
-                >
-                  <p className="text-[10px] text-slate-400">{c.label}</p>
-                  <p
-                    className={`text-sm font-extrabold mono-nums ${
-                      c.hi ? "text-[#00FF85]" : "text-slate-100"
-                    }`}
-                  >
-                    {c.val}
-                  </p>
-                </div>
-              ))}
+            {/* 4 Clean Summary Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className="px-3 py-2.5 rounded-xl bg-[#05080D]/80 border border-white/10">
+                <p className="text-[10px] text-slate-400">Kupon Yapısı</p>
+                <p className="text-xs sm:text-sm font-extrabold text-slate-100 mono-nums mt-0.5">
+                  {liveStats.singles} Tek · {liveStats.doubles} Çifte · {liveStats.triples} Kapalı
+                </p>
+              </div>
+              <div className="px-3 py-2.5 rounded-xl bg-[#05080D]/80 border border-white/10">
+                <p className="text-[10px] text-slate-400">Kolon &amp; Tutar</p>
+                <p className="text-xs sm:text-sm font-extrabold text-[#00FF85] mono-nums mt-0.5">
+                  {liveStats.columns} Kolon · {liveStats.estimatedCost.toFixed(0)} ₺
+                </p>
+              </div>
+              <div className="px-3 py-2.5 rounded-xl bg-[#05080D]/80 border border-white/10">
+                <p className="text-[10px] text-slate-400">Beklenen Doğru</p>
+                <p className="text-xs sm:text-sm font-extrabold text-[#00FF85] mono-nums mt-0.5">
+                  {liveStats.probs.expected_hits.toFixed(1)} / 15 Maç
+                </p>
+              </div>
+              <div className="px-3 py-2.5 rounded-xl bg-[#05080D]/80 border border-white/10">
+                <p className="text-[10px] text-slate-400">İkramiye Şansı (13+)</p>
+                <p className="text-xs sm:text-sm font-extrabold text-slate-100 mono-nums mt-0.5">
+                  %{liveStats.probs.p13_plus.toFixed(1)}
+                </p>
+                <p className="text-[10px] text-slate-400 mono-nums mt-0.5">
+                  12+: %{liveStats.probs.p12_plus.toFixed(1)} · 14+: %{liveStats.probs.p14_plus.toFixed(1)}
+                </p>
+              </div>
             </div>
 
             {/* Live Survival Strip */}
@@ -438,15 +495,16 @@ export function FikstraTotoPage({
             )}
           </div>
 
-          {/* Strategy & Budget Distributor */}
+          {/* Instant Strategy & Budget Bar */}
           <div className="p-4 rounded-2xl glass-card space-y-3">
             <div className="grid grid-cols-3 gap-1.5">
               {MODES.map((m) => (
                 <button
                   key={m.key}
                   type="button"
-                  onClick={() => setMode(m.key)}
-                  className={`p-2 rounded-xl text-left border transition-all ${
+                  disabled={optimizing}
+                  onClick={() => handleSelectMode(m.key)}
+                  className={`p-2 rounded-xl text-left border transition-all disabled:opacity-60 ${
                     mode === m.key
                       ? "bg-[#00FF85]/15 border-[#00FF85]/50 text-[#00FF85]"
                       : "bg-[#05080D]/60 border-white/10 text-slate-300 hover:border-white/25"
@@ -464,11 +522,12 @@ export function FikstraTotoPage({
                   <button
                     key={b}
                     type="button"
-                    onClick={() => setBudget(b)}
-                    className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold mono-nums transition-colors ${
+                    disabled={optimizing}
+                    onClick={() => handleSelectBudget(b)}
+                    className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold mono-nums transition-colors disabled:opacity-60 ${
                       budget === b
                         ? "bg-[#00FF85] text-[#05080D]"
-                        : "bg-white/[0.04] text-slate-300 border border-white/10"
+                        : "bg-white/[0.04] text-slate-300 border border-white/10 hover:border-white/25"
                     }`}
                   >
                     {b}
@@ -478,12 +537,12 @@ export function FikstraTotoPage({
 
               <button
                 type="button"
-                onClick={handleDistributeBudget}
-                disabled={optimizing}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#00FF85] text-[#05080D] text-xs font-extrabold hover:bg-emerald-400 disabled:opacity-50"
+                onClick={handleResetLocks}
+                disabled={!hasLocksOrManualEdits || optimizing}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.04] border border-white/10 text-slate-300 hover:text-white hover:border-white/25 text-[11px] font-bold disabled:opacity-40 disabled:pointer-events-none transition-colors"
               >
-                <Wand2 className="w-3.5 h-3.5" />
-                {optimizing ? "Hesaplanıyor..." : "Bütçeyi Dağıt"}
+                <RotateCcw className="w-3.5 h-3.5" />
+                Kilitleri Kaldır &amp; Sıfırla
               </button>
             </div>
             {optError && (
@@ -495,19 +554,47 @@ export function FikstraTotoPage({
 
           {/* 15-Match Interactive Toto Table */}
           <div className="rounded-2xl glass-card divide-y divide-white/[0.06] overflow-hidden">
+            {/* Desktop Column Headers */}
+            <div className="hidden sm:flex items-center justify-between px-4 py-2 bg-[#05080D]/60 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <span className="w-6 text-center">#</span>
+                <span>Maç &amp; İhtimaller</span>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <span className="w-[104px] text-center">Seçim (1 · X · 2)</span>
+                <span className="w-8 text-center">Kilitle</span>
+              </div>
+            </div>
+
             {week.matches.map((m: SportotoMatchItem) => {
               const code = canonicalPickCode(picksBySlot[m.slot_no] || "1");
               const locked = Boolean(lockedSlots[m.slot_no]);
               const p1 = Math.round((m.prob_1 || 0) * 100);
               const px = Math.round((m.prob_x || 0) * 100);
               const p2 = Math.max(0, 100 - p1 - px);
-              const chaosCls =
-                m.chaos?.label === "Banko"
-                  ? "bg-emerald-500/15 text-[#00FF85] border-emerald-500/30"
-                  : m.chaos?.label === "Çok Riskli"
-                  ? "bg-rose-500/15 text-rose-300 border-rose-500/30"
-                  : "bg-amber-500/15 text-amber-300 border-amber-500/30";
+              const maxPct = Math.max(p1, px, p2);
+              const riskLabel = getMatchRiskLabel(m);
+
+              const riskCls =
+                riskLabel === "Banko"
+                  ? "bg-emerald-500/15 text-[#00FF85] border-emerald-500/35"
+                  : riskLabel === "Favori"
+                  ? "bg-lime-500/15 text-lime-300 border-lime-500/30"
+                  : riskLabel === "Ortada"
+                  ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
+                  : "bg-rose-500/15 text-rose-300 border-rose-500/30";
+
+              const kindLabel = code.length === 1 ? "Tek" : code.length === 2 ? "Çifte" : "Kapalı";
+              const kindCls =
+                code.length === 3
+                  ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
+                  : code.length === 2
+                  ? "bg-cyan-500/15 text-cyan-300 border-cyan-500/30"
+                  : "bg-white/[0.06] text-slate-300 border-white/10";
+
               const hit = m.actual_result ? code.includes(m.actual_result) : null;
+              const hasPublic =
+                m.public_pct_1 !== null && m.public_pct_x !== null && m.public_pct_2 !== null;
 
               return (
                 <div key={m.slot_no} className="p-3 sm:px-4 space-y-2 hover:bg-white/[0.02]">
@@ -516,11 +603,24 @@ export function FikstraTotoPage({
                       <span className="w-6 h-6 rounded-lg bg-white/[0.06] border border-white/10 flex items-center justify-center text-[11px] font-bold text-slate-300 mono-nums shrink-0 mt-0.5">
                         {m.slot_no}
                       </span>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs sm:text-sm font-bold text-slate-100 truncate">
-                          {m.home_team} - {m.away_team}
-                        </p>
-                        <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                          <p className="text-xs sm:text-sm font-bold text-slate-100 truncate">
+                            {m.home_team} - {m.away_team}
+                          </p>
+                          {m.match_id && onSelectMatch && (
+                            <button
+                              type="button"
+                              onClick={() => onSelectMatch(m.match_id!, Boolean(m.actual_result))}
+                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-white/[0.06] hover:bg-[#00FF85]/15 text-[10px] font-bold text-slate-300 hover:text-[#00FF85] border border-white/10 transition-colors shrink-0"
+                            >
+                              Analiz
+                              <ArrowUpRight className="w-2.5 h-2.5" />
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-1.5">
                           <span
                             className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${
                               m.source === "fikstra_model"
@@ -530,11 +630,12 @@ export function FikstraTotoPage({
                           >
                             {m.source === "fikstra_model" ? "Model" : "Piyasa"}
                           </span>
-                          {m.chaos && (
-                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${chaosCls}`}>
-                              {m.chaos.label}
-                            </span>
-                          )}
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${riskCls}`}>
+                            {riskLabel}
+                          </span>
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${kindCls}`}>
+                            {kindLabel}
+                          </span>
                           {m.trap_signal?.is_trap && (
                             <span
                               title={
@@ -543,12 +644,9 @@ export function FikstraTotoPage({
                               }
                               className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-rose-500/20 text-rose-300 border border-rose-500/40"
                             >
-                              RİSKLİ FAVORİ
+                              Halk %{Math.round(m.trap_signal.fav_public_pct)} (Sürpriz Riski)
                             </span>
                           )}
-                          <span className="text-[10px] text-slate-400 mono-nums">
-                            %{p1} · %{px} · %{p2}
-                          </span>
                           {m.actual_result && (
                             <span
                               className={`px-1.5 py-0.5 rounded text-[10px] font-extrabold mono-nums ${
@@ -556,6 +654,27 @@ export function FikstraTotoPage({
                               }`}
                             >
                               MS:{m.actual_result} {hit ? "✓" : "✕"}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] mono-nums">
+                          <span className="text-slate-400">
+                            <span className={p1 === maxPct ? "font-extrabold text-slate-100" : ""}>
+                              1: %{p1}
+                            </span>
+                            {" · "}
+                            <span className={px === maxPct ? "font-extrabold text-slate-100" : ""}>
+                              X: %{px}
+                            </span>
+                            {" · "}
+                            <span className={p2 === maxPct ? "font-extrabold text-slate-100" : ""}>
+                              2: %{p2}
+                            </span>
+                          </span>
+                          {hasPublic && (
+                            <span className="text-[10px] text-slate-500">
+                              İddaa Halkı: 1:%{Math.round(m.public_pct_1!)} · X:%{Math.round(m.public_pct_x!)} · 2:%{Math.round(m.public_pct_2!)}
                             </span>
                           )}
                         </div>
@@ -600,57 +719,70 @@ export function FikstraTotoPage({
             })}
           </div>
 
-          {/* Marginal Advisor */}
-          {(liveStats.advice.best_upgrade || liveStats.advice.safest_downgrade) && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {liveStats.advice.best_upgrade && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const up = liveStats.advice.best_upgrade!;
-                    setPicksBySlot((prev) => ({ ...prev, [up.slot_no]: up.to_code }));
-                    showToast(`Maç ${up.slot_no} -> ${up.to_code} yükseltildi`);
-                  }}
-                  className="p-3 rounded-2xl glass-card hover:border-[#00FF85]/45 text-left space-y-1 transition-colors"
-                >
-                  <p className="text-[10px] font-extrabold uppercase tracking-wider text-[#00FF85]">
-                    Önerilen Ekleme (Tıkla Uygula)
-                  </p>
-                  <p className="text-xs font-bold text-slate-100 truncate">
-                    #{liveStats.advice.best_upgrade.slot_no} {liveStats.advice.best_upgrade.home_team} -{" "}
-                    {liveStats.advice.best_upgrade.away_team}
-                  </p>
-                  <p className="text-[11px] text-slate-400 mono-nums">
-                    {liveStats.advice.best_upgrade.from_code} → {liveStats.advice.best_upgrade.to_code} (+%
-                    {liveStats.advice.best_upgrade.gain_prob_pct} ihtimal)
-                  </p>
-                </button>
-              )}
-              {liveStats.advice.safest_downgrade && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const dn = liveStats.advice.safest_downgrade!;
-                    setPicksBySlot((prev) => ({ ...prev, [dn.slot_no]: dn.to_code }));
-                    showToast(`Maç ${dn.slot_no} -> ${dn.to_code} indirildi`);
-                  }}
-                  className="p-3 rounded-2xl glass-card hover:border-cyan-500/45 text-left space-y-1 transition-colors"
-                >
-                  <p className="text-[10px] font-extrabold uppercase tracking-wider text-cyan-300">
-                    Önerilen Eksiltme (Tıkla Uygula)
-                  </p>
-                  <p className="text-xs font-bold text-slate-100 truncate">
-                    #{liveStats.advice.safest_downgrade.slot_no} {liveStats.advice.safest_downgrade.home_team} -{" "}
-                    {liveStats.advice.safest_downgrade.away_team}
-                  </p>
-                  <p className="text-[11px] text-slate-400 mono-nums">
-                    {liveStats.advice.safest_downgrade.from_code} → {liveStats.advice.safest_downgrade.to_code} (-%
-                    {liveStats.advice.safest_downgrade.loss_prob_pct} kayıp)
-                  </p>
-                </button>
-              )}
+          {/* Smart Coupon Check (Replaces Ping-Pong Add/Remove) */}
+          <div className="p-4 rounded-2xl glass-card space-y-2.5">
+            <div className="flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-[#00FF85]" />
+              <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-300">
+                Kupon Kontrolü
+              </h3>
             </div>
-          )}
+
+            {liveStats.couponCheck.status === "improvable" && liveStats.couponCheck.improvedPicks ? (
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <p className="text-xs font-extrabold text-amber-300">
+                    Aynı bütçeyle daha güçlü bir dağılım mümkün
+                  </p>
+                  <p className="text-xs text-slate-200 leading-relaxed">
+                    {liveStats.couponCheck.message}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPicksBySlot(liveStats.couponCheck.improvedPicks!);
+                    showToast("Aynı bütçe için en verimli dağılım uygulandı");
+                  }}
+                  className="px-4 py-2 rounded-xl bg-[#00FF85] text-[#05080D] text-xs font-extrabold hover:bg-emerald-400 transition-colors shrink-0"
+                >
+                  Aynı Bütçeyle İyileştir
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="px-3 py-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-2 text-xs font-bold text-[#00FF85]">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>Kuponun {liveStats.columns} kolon için en verimli dağılımda.</span>
+                </div>
+                {liveStats.couponCheck.nextDouble && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-300 px-1">
+                    <span>
+                      Bütçeyi 2 katına çıkarırsan ilk çifte şans için en mantıklı maç:{" "}
+                      <strong className="text-white">
+                        #{liveStats.couponCheck.nextDouble.slot_no}{" "}
+                        {liveStats.couponCheck.nextDouble.home_team} -{" "}
+                        {liveStats.couponCheck.nextDouble.away_team} (
+                        {liveStats.couponCheck.nextDouble.from_code} →{" "}
+                        {liveStats.couponCheck.nextDouble.to_code})
+                      </strong>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nd = liveStats.couponCheck.nextDouble!;
+                        setPicksBySlot((prev) => ({ ...prev, [nd.slot_no]: nd.to_code }));
+                        showToast(`${nd.new_columns} kolona yükseltildi`);
+                      }}
+                      className="px-3 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] border border-white/15 text-[11px] font-bold text-slate-200 mono-nums shrink-0 transition-colors"
+                    >
+                      Uygula ({liveStats.couponCheck.nextDouble.new_columns} Kolon)
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Action Buttons */}
           <div className="flex flex-wrap items-center gap-2">
@@ -750,33 +882,33 @@ export function FikstraTotoPage({
         </div>
       )}
 
-      {/* History */}
-      {history.length > 0 && (
+      {/* Settled History Only */}
+      {settledHistory.length > 0 && (
         <div className="p-4 rounded-2xl glass-card space-y-2.5">
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
             Geçmiş Fikstra Toto Karnesi
           </h3>
           <div className="divide-y divide-white/[0.06] text-xs">
-            {history.map((h) => (
+            {settledHistory.map((h) => (
               <div key={h.id} className="py-2 flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="font-semibold text-slate-200 truncate">{h.title}</span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
-                    {h.status === "SETTLED" ? "Sonuçlandı" : "Yayında"}
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-[#00FF85] border border-emerald-500/25">
+                    Sonuçlandı
                   </span>
                 </div>
-                <div className="flex items-center gap-2 mono-nums text-[11px]">
+                <div className="flex flex-wrap items-center gap-2 mono-nums text-[11px]">
                   {(["16", "32", "64"] as const).map((b) => {
                     const s = h.plans_summary?.[b];
-                    if (!s) return null;
+                    if (!s || s.hits === null) return null;
                     return (
                       <span
                         key={b}
                         className="px-2 py-0.5 rounded-lg bg-[#05080D]/80 border border-white/10 text-slate-300"
                       >
-                        {b}K:{" "}
+                        {b} Kolon:{" "}
                         <strong className="text-[#00FF85]">
-                          {s.hits !== null ? `${s.hits}/${s.settled_count}` : `~${s.expected_hits.toFixed(1)}`}
+                          {s.hits}/{s.settled_count}
                         </strong>
                       </span>
                     );
