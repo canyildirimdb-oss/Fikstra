@@ -90,7 +90,7 @@ def _build_mock_bulletin(cycle_no: int = 370, include_missing_slot: int | None =
                 "slot_no": idx,
                 "home_team": home,
                 "away_team": away,
-                "event_date": "2026-11-28T16:00:00",
+                "event_date": (datetime.now(timezone.utc) + timedelta(hours=12 + idx)).isoformat(),
                 "actual_result": ("X" if winner == "0" else winner),
                 "public_pct_1": 68.0 if idx in (6, 7) else None,
                 "public_pct_x": 18.0 if idx in (6, 7) else None,

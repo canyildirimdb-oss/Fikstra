@@ -81,7 +81,11 @@ def main():
             market_key="MS",
             selection_key="X",
             iddaa_odd=3.10,
+            published_odd=3.10,
             confidence_score=70.0,
+            published_confidence=70.0,
+            published_at=now - timedelta(hours=5),
+            is_top_pick=True,
             score_breakdown_json=json.dumps({"blended_prob_pct": 35.0}),
             status="PENDING",
         )
@@ -90,7 +94,11 @@ def main():
             market_key="MS",
             selection_key="1",
             iddaa_odd=1.85,
+            published_odd=1.85,
             confidence_score=72.0,
+            published_confidence=72.0,
+            published_at=now - timedelta(hours=5),
+            is_top_pick=True,
             score_breakdown_json=json.dumps({"blended_prob_pct": 60.0}),
             status="PENDING",
         )
@@ -99,7 +107,11 @@ def main():
             market_key="MS",
             selection_key="1",
             iddaa_odd=1.60,
+            published_odd=1.60,
             confidence_score=75.0,
+            published_confidence=75.0,
+            published_at=now - timedelta(hours=5),
+            is_top_pick=True,
             score_breakdown_json=json.dumps({"blended_prob_pct": 68.0}),
             status="PENDING",
         )
@@ -248,19 +260,21 @@ def main():
         release_db_sync_lock(db)
 
         # 3b: force=true without X-Cron-Secret preserves existing DB AI summary
-        db.add(MatchContext(match_id=m_later.id, ai_summary="Kilitli DB Ozeti", ai_source="gemini"))
+        db.add(MatchContext(match_id=m_later.id, ai_summary="Kilitli DB Ozeti", ai_summary_pick="MS:1", ai_source="gemini"))
         db.commit()
         r_ai = client.post(f"/api/matches/{m_later.id}/ai-summary?force=true").json()
         assert r_ai["ai_summary"] == "Kilitli DB Ozeti", f"force=true bypassed without secret: {r_ai}"
 
-        # 3c: 180s cooldown on POST /api/refresh without X-Cron-Secret
+        # 3c: POST /api/refresh requires valid X-Cron-Secret (public callers get 403)
         from unittest.mock import patch
-        with patch("app.routers.api.run_sync_pipeline", return_value={"status": "mocked"}):
-            r_ref1 = client.post("/api/refresh").json()
-            r_ref2 = client.post("/api/refresh").json()
-        assert r_ref1["status"] == "started", f"First refresh failed: {r_ref1}"
-        assert r_ref2["status"] == "cooldown" and 1 <= r_ref2["retry_after_sec"] <= 180, f"Cooldown failed: {r_ref2}"
-        print(f"TEST_3_LOCKS_AND_QUOTA: PASS (sync_lock={res_locked['status']}, force_blocked=True, refresh_cooldown={r_ref2})")
+        from app.config import settings
+        with patch("app.routers.api.run_sync_pipeline", return_value={"status": "mocked"}) as mock_sync:
+            r_unauth = client.post("/api/refresh")
+            assert r_unauth.status_code == 403, f"Unauthenticated /api/refresh should return 403, got {r_unauth.status_code}"
+            assert mock_sync.call_count == 0
+            r_auth = client.post("/api/refresh", headers={"X-Cron-Secret": settings.cron_secret})
+            assert r_auth.status_code == 200 and r_auth.json()["status"] == "started"
+        print("TEST_3_LOCKS_AND_QUOTA: PASS (sync_lock=already_running, force_blocked=True, refresh_auth=403)")
     finally:
         db.close()
         engine.dispose()

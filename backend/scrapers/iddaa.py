@@ -107,6 +107,7 @@ def is_major_league(
 def _extract_odds_from_markets(markets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Extract normalized MS, CS, AU (1.5/2.5/3.5), KG odds from iddaa event markets."""
     extracted: list[dict[str, Any]] = []
+    seen_pairs: set[tuple[str, str]] = set()
 
     for m in markets or []:
         t = m.get("t")
@@ -163,6 +164,10 @@ def _extract_odds_from_markets(markets: list[dict[str, Any]]) -> list[dict[str, 
                     sel_key = "YOK"
 
             if sel_key:
+                pair = (market_key, sel_key)
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
                 extracted.append({
                     "market_key": market_key,
                     "selection_key": sel_key,

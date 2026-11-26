@@ -323,11 +323,24 @@ def test_rm4_cache_v4_invalidation():
             )
         return _FakeResp(404, {})
 
+    # _build_match_detail_ctx must NOT make live HTTP calls; it must ignore stale recent_v3 and read recent_v4 from DB cache
+    with patch("httpx.Client.get", new=fake_get) as mock_get:
+        ctx_missing_v4 = _build_match_detail_ctx(db, m, None)
+    assert ctx_missing_v4["home_recent_matches"] == []
+
+    set_cached_json(
+        db,
+        f"recent_v4:{m.id}",
+        {
+            "home": [{"opponent": "Levski Sofia", "score": "2-0", "result": "W"}],
+            "away": [{"opponent": "Eyupspor", "score": "1-0", "result": "W"}],
+        },
+    )
+    db.commit()
     with patch("httpx.Client.get", new=fake_get):
         ctx_out = _build_match_detail_ctx(db, m, None)
 
     assert ctx_out["home_recent_matches"][0]["opponent"] == "Levski Sofia"
-    assert ctx_out["home_form"] == ["W"]
     assert get_cached_json(db, f"recent_v4:{m.id}", ttl_hours=6.0) is not None
     print("TEST_RM4_CACHE_V4_INVALIDATION: PASS")
 

@@ -186,6 +186,7 @@ def test_tg2_settle_reply_and_daily_report():
         published_odd=1.95,
         confidence_score=74.0,
         published_confidence=74.0,
+        published_at=m_won.start_time_utc - timedelta(hours=1),
         is_top_pick=True,
         status="WON",
     )
@@ -197,6 +198,7 @@ def test_tg2_settle_reply_and_daily_report():
         published_odd=1.60,
         confidence_score=64.0,
         published_confidence=64.0,
+        published_at=m_lost.start_time_utc - timedelta(hours=1),
         is_top_pick=True,
         status="LOST",
     )
@@ -387,8 +389,8 @@ def test_tg4_deep_links():
 
     base = telegram_bot._public_url()
     assert c_markup["inline_keyboard"][0][0]["url"] == f"{base}/?tab=coupons"
-    assert s_markup["inline_keyboard"][0][0]["url"] == f"{base}/?match={p.id}"
-    assert v_markup["inline_keyboard"][0][0]["url"] == f"{base}/?match={p.id}"
+    assert s_markup["inline_keyboard"][0][0]["url"] == f"{base}/?match={p.match_id}"
+    assert v_markup["inline_keyboard"][0][0]["url"] == f"{base}/?match={p.match_id}"
 
     # Verify daily report button uses /?tab=performance
     now_tr = datetime(2026, 11, 26, 2, 0, tzinfo=telegram_bot.TR_TZ)
@@ -409,6 +411,7 @@ def test_tg4_deep_links():
     db.add(Prediction(
         match_id=m_y.id, market_key="MS", selection_key="1",
         iddaa_odd=1.85, published_odd=1.85, confidence_score=72.0, published_confidence=72.0,
+        published_at=y_utc - timedelta(hours=2),
         is_top_pick=True, status="WON",
     ))
     db.commit()
@@ -447,12 +450,13 @@ def test_tg5_weekly_report():
 
     # 3 matches in Premier League (last 7 days: Nov 24-28)
     for idx, (st, odd) in enumerate([("WON", 2.40), ("WON", 1.80), ("LOST", 1.70)]):
+        mt_start = (mon_tr - timedelta(days=2 + idx)).replace(hour=18, minute=0).astimezone(timezone.utc)
         mt = Match(
             iddaa_id=f"tg_w_{idx}",
             league="Premier League",
             home_team=f"Home{idx}",
             away_team=f"Away{idx}",
-            start_time_utc=(mon_tr - timedelta(days=2 + idx)).replace(hour=18, minute=0).astimezone(timezone.utc),
+            start_time_utc=mt_start,
             status="FINISHED",
             home_score=2 if st == "WON" else 0,
             away_score=1,
@@ -462,6 +466,7 @@ def test_tg5_weekly_report():
         db.add(Prediction(
             match_id=mt.id, market_key="MS", selection_key="1",
             iddaa_odd=odd, published_odd=odd, confidence_score=70.0, published_confidence=70.0,
+            published_at=mt_start - timedelta(hours=2),
             is_top_pick=True, status=st,
         ))
 
@@ -525,7 +530,7 @@ def test_tg6_watchdog_cooldown():
         db.flush()
         db.add(Prediction(
             match_id=mt.id, market_key="MS", selection_key="1",
-            iddaa_odd=1.90, confidence_score=65.0, status="VOID", settled_at=now_utc - timedelta(hours=1),
+            iddaa_odd=1.90, confidence_score=65.0, is_top_pick=True, status="VOID", settled_at=now_utc - timedelta(hours=1),
         ))
     db.commit()
 
@@ -651,7 +656,7 @@ def test_tg7_webhook_commands():
 
             assert len(calls) == 3
             assert "Barcelona - Valencia" in calls[0]["text"]
-            assert f"/?match={p.id}" in calls[0]["text"]
+            assert f"/?match={mt.id}" in calls[0]["text"]
             assert "BANKO KUPON" in calls[1]["text"]
             assert "KARNE" in calls[2]["text"]
     finally:

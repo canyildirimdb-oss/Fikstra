@@ -854,7 +854,7 @@ def analyze_upcoming_matches(db: Session) -> int:
                 pred.trap_warning = sm["trap_warning"]
                 updated_count += 1
 
-        # Mark exactly one official #1 top pick per match (frozen once match starts/settles)
+        # Mark exactly one official #1 top pick per match (frozen once published or match starts/settles)
         db.flush()
         pending_for_match = (
             db.query(Prediction)
@@ -862,31 +862,51 @@ def analyze_upcoming_matches(db: Session) -> int:
             .all()
         )
         if pending_for_match:
-            eligible_top = [p for p in pending_for_match if p.iddaa_odd < MAX_HIGHLIGHT_ODD] or pending_for_match
-            realistic_top = []
-            for p in eligible_top:
-                bd = json.loads(p.score_breakdown_json) if p.score_breakdown_json else {}
-                t_prob = float(bd.get("true_prob_pct", 50.0)) / 100.0
-                hr = _is_high_risk_pick(p.market_key, p.selection_key, t_prob, p.iddaa_odd)
-                msig = (p.value_edge_pct is not None and p.value_edge_pct >= 3.0) and (
-                    (p.odds_drop_pct is not None and p.odds_drop_pct >= 3.0)
-                    or float(bd.get("vel_3h_pct") or 0.0) >= 3.0
-                )
-                if not (hr and not msig):
-                    realistic_top.append(p)
-            candidate_pool = realistic_top or eligible_top
-            best_pred = max(
-                candidate_pool,
-                key=lambda p: (
-                    p.confidence_score,
-                    p.value_edge_pct if p.value_edge_pct is not None else -99.0,
-                    p.iddaa_odd,
-                ),
+            m_start = (
+                match.start_time_utc.replace(tzinfo=timezone.utc)
+                if match.start_time_utc and match.start_time_utc.tzinfo is None
+                else match.start_time_utc
             )
+            is_pre_kickoff = bool(m_start and m_start > now)
+            locked_pred = next(
+                (p for p in pending_for_match if p.is_top_pick and p.published_at is not None),
+                None,
+            )
+            if locked_pred is not None:
+                best_pred = locked_pred
+            else:
+                eligible_top = [p for p in pending_for_match if p.iddaa_odd < MAX_HIGHLIGHT_ODD] or pending_for_match
+                realistic_top = []
+                for p in eligible_top:
+                    bd = json.loads(p.score_breakdown_json) if p.score_breakdown_json else {}
+                    t_prob = float(bd.get("true_prob_pct", 50.0)) / 100.0
+                    hr = _is_high_risk_pick(p.market_key, p.selection_key, t_prob, p.iddaa_odd)
+                    msig = (p.value_edge_pct is not None and p.value_edge_pct >= 3.0) and (
+                        (p.odds_drop_pct is not None and p.odds_drop_pct >= 3.0)
+                        or float(bd.get("vel_3h_pct") or 0.0) >= 3.0
+                    )
+                    if not (hr and not msig):
+                        realistic_top.append(p)
+                candidate_pool = realistic_top or eligible_top
+                best_pred = max(
+                    candidate_pool,
+                    key=lambda p: (
+                        p.confidence_score,
+                        p.value_edge_pct if p.value_edge_pct is not None else -99.0,
+                        p.iddaa_odd,
+                    ),
+                )
+
             for p in pending_for_match:
                 is_best = (p.id == best_pred.id) if (p.id is not None and best_pred.id is not None) else (p is best_pred)
                 p.is_top_pick = is_best
-                if is_best and p.published_odd is None:
+                if (
+                    is_best
+                    and p.published_at is None
+                    and p.confidence_score >= 60.0
+                    and MIN_ODD_RULE <= p.iddaa_odd < MAX_HIGHLIGHT_ODD
+                    and is_pre_kickoff
+                ):
                     bd_best = json.loads(p.score_breakdown_json) if p.score_breakdown_json else {}
                     pub_prob_pct = bd_best.get("blended_prob_pct") or bd_best.get("true_prob_pct")
                     p.published_odd = p.iddaa_odd

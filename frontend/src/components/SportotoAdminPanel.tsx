@@ -157,11 +157,12 @@ export function SportotoAdminPanel({
         const px = d?.pub_x ? Number(d.pub_x.replace(",", ".")) : null;
         const p2 = d?.pub_2 ? Number(d.pub_2.replace(",", ".")) : null;
         const validPub = p1 && px && p2 && p1 > 0 && px > 0 && p2 > 0;
+        const resVal = (d?.actual_result ?? "").trim();
         return {
           slot_no: m.slot_no,
           ...(validOdds ? { odd_1: o1, odd_x: ox, odd_2: o2 } : {}),
           ...(validPub ? { public_pct_1: p1, public_pct_x: px, public_pct_2: p2 } : {}),
-          actual_result: d?.actual_result ?? "",
+          ...(autoSettle && !resVal ? {} : { actual_result: resVal }),
         };
       });
       const updated = await api.adminPatchSportotoMatches(secret, activeWeek.id, {

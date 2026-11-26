@@ -101,7 +101,7 @@ def extract_regular_time_score(
         elif details and home_id and away_id:
             rh = 0
             ra = 0
-            parsed_any_goal = False
+            total_parsed_goals = 0
             unparseable_clock = False
             for d in details:
                 is_goal = bool(d.get("scoringPlay"))
@@ -115,16 +115,21 @@ def extract_regular_time_score(
                     unparseable_clock = True
                     break
                 minute = int(m_min.group(1))
+                tid = str((d.get("team") or {}).get("id") or "")
+                if tid in (home_id, away_id):
+                    total_parsed_goals += 1
                 # Stoppage time in 90th min appears as "90'+2'"; extra time starts at "91'"
                 if minute <= 90:
-                    tid = str((d.get("team") or {}).get("id") or "")
                     if tid == home_id:
                         rh += 1
-                        parsed_any_goal = True
                     elif tid == away_id:
                         ra += 1
-                        parsed_any_goal = True
-            if not unparseable_clock and (parsed_any_goal or (home_score == 0 and away_score == 0)):
+            if (
+                not unparseable_clock
+                and home_score is not None
+                and away_score is not None
+                and total_parsed_goals == (home_score + away_score)
+            ):
                 reg_home_score = rh
                 reg_away_score = ra
 

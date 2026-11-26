@@ -27,7 +27,7 @@ _MIN_INTERVAL_SEC = 4.2  # Free tier friendly (~14 RPM max)
 
 def is_gemini_circuit_open() -> bool:
     """Return True when the Gemini 429/503 circuit breaker cooldown is currently active."""
-    return time.time() < _GEMINI_COOLDOWN_UNTIL
+    return time.monotonic() < _GEMINI_COOLDOWN_UNTIL
 
 MARKET_LABELS = {
     "MS": "Maç Sonucu",

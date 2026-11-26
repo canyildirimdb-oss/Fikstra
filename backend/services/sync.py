@@ -207,6 +207,7 @@ def run_sync_pipeline(
                         opening_odd=o_item["odd"],
                     )
                     db.add(curr)
+                    existing_odds[key] = curr
                     db.add(
                         OddsHistory(
                             match_id=match.id,
@@ -503,20 +504,31 @@ def run_sync_pipeline(
                 parts.append("tm_injuries")
             match.data_status = "+".join(parts) if parts else "espn_matched_no_details"
 
-        # Also populate ClubElo for any remaining European scheduled matches without ESPN match ID
+        # Also populate ClubElo for any remaining European scheduled matches without overwriting valid ELO
         for m in db.query(Match).filter(Match.status == "SCHEDULED").all():
-            h_elo = lookup_clubelo(m.home_team, clubelo_ratings, league=m.league, country=m.country)
-            a_elo = lookup_clubelo(m.away_team, clubelo_ratings, league=m.league, country=m.country)
             ctx = db.query(MatchContext).filter(MatchContext.match_id == m.id).first()
-            if h_elo or a_elo:
+            need_home = ctx is None or ctx.home_elo is None
+            need_away = ctx is None or ctx.away_elo is None
+            if not need_home and not need_away:
+                continue
+            h_elo = (
+                lookup_clubelo(m.home_team, clubelo_ratings, league=m.league, country=m.country)
+                if need_home
+                else None
+            )
+            a_elo = (
+                lookup_clubelo(m.away_team, clubelo_ratings, league=m.league, country=m.country)
+                if need_away
+                else None
+            )
+            if (h_elo is not None) or (a_elo is not None):
                 if not ctx:
                     ctx = MatchContext(match_id=m.id)
                     db.add(ctx)
-                ctx.home_elo = h_elo
-                ctx.away_elo = a_elo
-            elif ctx and (ctx.home_elo is not None or ctx.away_elo is not None):
-                ctx.home_elo = None
-                ctx.away_elo = None
+                if need_home and h_elo is not None:
+                    ctx.home_elo = h_elo
+                if need_away and a_elo is not None:
+                    ctx.away_elo = a_elo
 
         db.commit()
         # Ensure all remaining SCHEDULED matches (including non-ESPN leagues) get global form & recent_v4

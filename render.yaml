@@ -20,3 +20,5 @@ services:
         sync: false
       - key: VAPID_SUBJECT
         value: mailto:admin@example.com
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false

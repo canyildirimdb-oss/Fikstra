@@ -312,7 +312,7 @@ export function PerformancePage({ refreshTrigger, onSelectMatch }: Props) {
             Henüz Sonuçlanmış Tahmin Bulunmuyor
           </h3>
           <p className="text-xs text-slate-400 max-w-md mx-auto">
-            İlk sonuçlar maçlar tamamlandıktan 130 dk sonra otomatik işlenecektir. Sistem hiçbir
+            İlk sonuçlar maçlar tamamlandıktan sonra maç bitiminde otomatik işlenecektir. Sistem hiçbir
             sahte geçmiş performans verisi üretmez.
           </p>
         </div>
@@ -508,7 +508,7 @@ export function PerformancePage({ refreshTrigger, onSelectMatch }: Props) {
                     </span>
                   </div>
                   <div className="p-2.5 rounded-xl bg-[#0B0F17] border border-[#1F2937]">
-                    <span className="text-[10px] text-slate-400 block">ROI</span>
+                    <span className="text-[10px] text-slate-400 block">Net Getiri</span>
                     <span className="text-sm font-extrabold mono-nums text-slate-100">
                       %{data.virtual_bankroll.roi_pct}
                     </span>

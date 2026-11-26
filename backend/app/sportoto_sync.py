@@ -249,10 +249,46 @@ def _fetch_bulletin_multi_source() -> tuple[Optional[dict[str, Any]], list[str]]
     return None, errors
 
 
-def _find_best_db_match(home: str, away: str, candidates: list[Match]) -> Optional[Match]:
+def _parse_event_dt_utc(raw: Any) -> Optional[datetime]:
+    if not raw:
+        return None
+    if isinstance(raw, (int, float)):
+        try:
+            ts = float(raw)
+            if ts > 1e12:
+                ts /= 1000.0
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+        except Exception:
+            return None
+    try:
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _find_best_db_match(
+    home: str,
+    away: str,
+    candidates: list[Match],
+    event_date: Any = None,
+) -> Optional[Match]:
+    from scrapers.iddaa import is_youth_or_women_match
+
+    ev_dt = _parse_event_dt_utc(event_date)
     best: Optional[Match] = None
     best_score = 0.0
     for cand in candidates:
+        if is_youth_or_women_match(cand.league or "", cand.home_team or "", cand.away_team or ""):
+            continue
+        if ev_dt is not None and cand.start_time_utc is not None:
+            c_dt = (
+                cand.start_time_utc.replace(tzinfo=timezone.utc)
+                if cand.start_time_utc.tzinfo is None
+                else cand.start_time_utc.astimezone(timezone.utc)
+            )
+            if abs((c_dt - ev_dt).total_seconds()) > 18 * 3600:
+                continue
         sh = _team_match_score(home, cand.home_team)
         sa = _team_match_score(away, cand.away_team)
         if sh >= 0.72 and sa >= 0.72:
@@ -429,7 +465,7 @@ def sync_sportoto_auto(db: Session, *, trigger_notifications: bool = True) -> di
         away = item["away_team"]
         sm = existing_by_slot.get(slot)
 
-        best_match = _find_best_db_match(home, away, candidates)
+        best_match = _find_best_db_match(home, away, candidates, event_date=item.get("event_date"))
         sb_match = _find_best_sb_odds(home, away, sb_odds_events) if sb_odds_events else None
 
         prob_1 = prob_x = prob_2 = None

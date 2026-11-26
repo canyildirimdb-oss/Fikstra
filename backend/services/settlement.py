@@ -105,18 +105,22 @@ def cleanup_multi_market_settled_predictions(db: Session) -> int:
                 ),
             )
         else:
-            eligible = [p for p in preds if p.iddaa_odd < 4.0] or preds
-            official = max(
-                eligible,
-                key=lambda p: (
-                    p.confidence_score,
-                    p.value_edge_pct if p.value_edge_pct is not None else -99.0,
-                    p.iddaa_odd,
-                ),
+            published_only = [p for p in preds if p.published_at is not None]
+            official = (
+                max(
+                    published_only,
+                    key=lambda p: (
+                        p.confidence_score,
+                        p.value_edge_pct if p.value_edge_pct is not None else -99.0,
+                        p.iddaa_odd,
+                    ),
+                )
+                if published_only
+                else None
             )
 
         for p in preds:
-            if p.id == official.id:
+            if official is not None and p.id == official.id:
                 if not p.is_top_pick:
                     p.is_top_pick = True
                     cleaned += 1
@@ -124,7 +128,7 @@ def cleanup_multi_market_settled_predictions(db: Session) -> int:
                 if p.is_top_pick:
                     p.is_top_pick = False
                     cleaned += 1
-                if p.id not in coupon_pred_ids:
+                if p.id not in coupon_pred_ids and p.status != "VOID":
                     p.status = "VOID"
                     cleaned += 1
 
@@ -256,14 +260,18 @@ def settle_finished_matches(db: Session, espn_events: Optional[list[dict]] = Non
                 if flagged:
                     official = flagged[0]
                 else:
-                    eligible = [p for p in preds if p.iddaa_odd < 4.0] or preds
-                    official = max(
-                        eligible,
-                        key=lambda p: (
-                            p.confidence_score,
-                            p.value_edge_pct if p.value_edge_pct is not None else -99.0,
-                            p.iddaa_odd,
-                        ),
+                    published_only = [p for p in preds if p.published_at is not None]
+                    official = (
+                        max(
+                            published_only,
+                            key=lambda p: (
+                                p.confidence_score,
+                                p.value_edge_pct if p.value_edge_pct is not None else -99.0,
+                                p.iddaa_odd,
+                            ),
+                        )
+                        if published_only
+                        else None
                     )
                 pred_ids = [p.id for p in preds]
                 coupon_pred_ids = {
@@ -273,7 +281,7 @@ def settle_finished_matches(db: Session, espn_events: Optional[list[dict]] = Non
                     .all()
                 }
                 for p in preds:
-                    if p.id == official.id:
+                    if official is not None and p.id == official.id:
                         p.is_top_pick = True
                         p.status = evaluate_prediction_outcome(p.market_key, p.selection_key, hs, as_)
                         p.settled_at = now

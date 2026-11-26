@@ -655,6 +655,7 @@ export function CouponsPage({
                         onImportSlip(
                           c.items.map((it) => ({
                             match_id: it.match_id,
+                            prediction_id: it.prediction_id,
                             home_team: it.home_team,
                             away_team: it.away_team,
                             market_key: it.market_key,

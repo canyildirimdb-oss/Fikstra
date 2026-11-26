@@ -109,6 +109,25 @@ def ensure_schema():
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN {col_name} {sql_type}"))
 
+    # One-time safe backfill for legacy official settled top picks missing published_at
+    if "predictions" in tables:
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "UPDATE predictions "
+                        "SET published_at = created_at, "
+                        "published_odd = COALESCE(published_odd, iddaa_odd), "
+                        "published_confidence = COALESCE(published_confidence, confidence_score) "
+                        "WHERE is_top_pick = :t "
+                        "AND status IN ('WON', 'LOST', 'VOID') "
+                        "AND published_at IS NULL"
+                    ),
+                    {"t": True},
+                )
+        except Exception:
+            pass
+
     # Ensure coupon_items.prediction_id uses ON DELETE RESTRICT on PostgreSQL
     if is_pg and "coupon_items" in tables:
         try:

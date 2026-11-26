@@ -125,6 +125,7 @@ export interface MatchDetail {
   home_score: number | null;
   away_score: number | null;
   data_status: string;
+  start_time_utc?: string;
   start_time_tr: string;
   start_date_tr: string;
   context: {
@@ -335,10 +336,13 @@ export interface SavedSlip {
 
 export interface PredictionStatusItem {
   id: number;
+  prediction_id?: number;
+  match_id?: number;
   home_team: string;
   away_team: string;
   league: string;
   kickoff: string | null;
+  start_time_utc?: string | null;
   pick: string;
   market_key: string;
   selection_key: string;
@@ -368,6 +372,7 @@ export interface AdminOverviewData {
   void_24h_count: number;
   gemini_circuit_open: boolean;
   telegram_admin_configured: boolean;
+  telegram_webhook_secret_configured?: boolean;
   recent_dispatches: {
     id: number;
     kind: string;

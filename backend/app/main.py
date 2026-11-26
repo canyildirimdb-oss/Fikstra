@@ -2,15 +2,16 @@ import csv
 import hmac
 import io
 import json
+import logging
 import os
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,9 +20,11 @@ from sqlalchemy import or_, text
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
-from app.database import ensure_schema, get_db
+from app.database import SessionLocal, ensure_schema, get_db
 from app.models import Coupon, CouponItem, Match, Prediction, PushSubscription, ScraperCache, SiteAnnouncement, SportotoMatch, SportotoWeek, SyncLog, TelegramDispatch
-from app.routers.api import clear_api_cache, router as api_router
+from app.routers.api import _enforce_ip_rate_limit, clear_api_cache, router as api_router
+
+logger = logging.getLogger("fikstra.main")
 from app.sportoto_engine import (
     VALID_RESULTS,
     devig_1x2,
@@ -279,7 +282,8 @@ def get_vapid_public_key():
 
 
 @app.post("/api/push/subscribe")
-def subscribe_push(payload: PushSubscribeIn, db: Session = Depends(get_db)):
+def subscribe_push(payload: PushSubscribeIn, request: Request, db: Session = Depends(get_db)):
+    _enforce_ip_rate_limit(request, "push_subscribe", max_calls=15, window_sec=60.0)
     if not _is_allowed_push_endpoint(payload.endpoint):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -403,6 +407,7 @@ def admin_overview(
         db.query(Prediction.id)
         .filter(
             Prediction.status == "VOID",
+            Prediction.is_top_pick.is_(True),
             Prediction.settled_at.isnot(None),
             Prediction.settled_at >= now_utc - timedelta(hours=24),
         )
@@ -434,6 +439,7 @@ def admin_overview(
         "void_24h_count": void_24h,
         "gemini_circuit_open": is_gemini_circuit_open(),
         "telegram_admin_configured": bool((settings.telegram_admin_chat_id or "").strip()),
+        "telegram_webhook_secret_configured": bool((settings.telegram_webhook_secret or "").strip()),
         "recent_dispatches": [
             {
                 "id": d.id,
@@ -663,29 +669,6 @@ def admin_patch_sportoto_matches(
 
     by_slot = {m.slot_no: m for m in week.matches}
 
-    if payload.auto_settle_from_db:
-        pred_ids = [m.prediction_id for m in week.matches if m.prediction_id]
-        if pred_ids:
-            preds = (
-                db.query(Prediction)
-                .options(joinedload(Prediction.match))
-                .filter(Prediction.id.in_(pred_ids))
-                .all()
-            )
-            pred_map = {p.id: p for p in preds}
-            for sm in week.matches:
-                if not sm.prediction_id:
-                    continue
-                pr = pred_map.get(sm.prediction_id)
-                mt = pr.match if pr else None
-                if mt and mt.status == "FINISHED" and mt.home_score is not None and mt.away_score is not None:
-                    if mt.home_score > mt.away_score:
-                        sm.actual_result = "1"
-                    elif mt.home_score == mt.away_score:
-                        sm.actual_result = "X"
-                    else:
-                        sm.actual_result = "2"
-
     for item in payload.matches:
         sm = by_slot.get(item.slot_no)
         if not sm:
@@ -720,6 +703,29 @@ def admin_patch_sportoto_matches(
             else:
                 raise HTTPException(status_code=400, detail=f"Slot {item.slot_no}: Geçersiz sonuç '{res}'")
 
+    if payload.auto_settle_from_db:
+        pred_ids = [m.prediction_id for m in week.matches if m.prediction_id]
+        if pred_ids:
+            preds = (
+                db.query(Prediction)
+                .options(joinedload(Prediction.match))
+                .filter(Prediction.id.in_(pred_ids))
+                .all()
+            )
+            pred_map = {p.id: p for p in preds}
+            for sm in week.matches:
+                if sm.actual_result is not None or not sm.prediction_id:
+                    continue
+                pr = pred_map.get(sm.prediction_id)
+                mt = pr.match if pr else None
+                if mt and mt.status == "FINISHED" and mt.home_score is not None and mt.away_score is not None:
+                    if mt.home_score > mt.away_score:
+                        sm.actual_result = "1"
+                    elif mt.home_score == mt.away_score:
+                        sm.actual_result = "X"
+                    else:
+                        sm.actual_result = "2"
+
     all_settled = len(week.matches) == 15 and all(m.actual_result in VALID_RESULTS for m in week.matches)
     if all_settled and week.status == "PUBLISHED":
         week.status = "SETTLED"
@@ -731,9 +737,20 @@ def admin_patch_sportoto_matches(
     return serialize_sportoto_week(week, include_plans=True)
 
 
+def _notify_sportoto_published_bg(week_id: int, week_title: str) -> None:
+    bg_db = SessionLocal()
+    try:
+        notify_sportoto_published(bg_db, week_id, week_title)
+    except Exception:
+        pass
+    finally:
+        bg_db.close()
+
+
 @app.post("/api/admin/sportoto/weeks/{week_id}/publish")
 def admin_publish_sportoto_week(
     week_id: int,
+    background_tasks: BackgroundTasks,
     x_cron_secret: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
@@ -760,10 +777,7 @@ def admin_publish_sportoto_week(
         week.published_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(week)
-    try:
-        notify_sportoto_published(db, week.id, week.title)
-    except Exception:
-        pass
+    background_tasks.add_task(_notify_sportoto_published_bg, week.id, week.title)
     return serialize_sportoto_week(week, include_plans=True)
 
 
@@ -796,20 +810,21 @@ def admin_delete_sportoto_week(
 
 
 @app.post("/api/telegram/webhook")
-async def telegram_webhook(
-    request: Request,
+def telegram_webhook(
+    payload: dict[str, Any] = Body(default_factory=dict),
     x_telegram_bot_api_secret_token: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
     secret = (settings.telegram_webhook_secret or "").strip()
-    if secret and not hmac.compare_digest(x_telegram_bot_api_secret_token or "", secret):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid Telegram webhook secret",
-        )
-    try:
-        payload = await request.json()
-    except Exception:
+    if secret:
+        if not hmac.compare_digest(x_telegram_bot_api_secret_token or "", secret):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Invalid Telegram webhook secret",
+            )
+    else:
+        logger.warning("TELEGRAM_WEBHOOK_SECRET is not set; accepting webhook without token verification")
+    if not isinstance(payload, dict) or not payload:
         return {"ok": True, "ignored": True}
     return handle_telegram_webhook(payload, db)
 

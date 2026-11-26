@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -6,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Match, OddsCurrent
+from scrapers.iddaa import is_youth_or_women_match
 from utils.cache import get_cached_json, set_cached_json
 from utils.team_matcher import find_best_external_match
 
@@ -17,30 +19,30 @@ ACTIVE_WINDOW_HOURS = 24
 REMAINING_CACHE_KEY = "odds_api:remaining_credits"
 QUOTA_PROBE_CACHE_KEY = "odds_api:quota_probe_at"
 
-# Map our Turkish/iddaa league names to The Odds API sport keys
-LEAGUE_TO_ODDS_API_SPORT = {
-    "ingiltere premier lig": "soccer_epl",
-    "premier lig": "soccer_epl",
-    "ispanya la liga": "soccer_spain_la_liga",
-    "la liga": "soccer_spain_la_liga",
-    "italya serie a": "soccer_italy_serie_a",
-    "serie a": "soccer_italy_serie_a",
-    "almanya bundesliga": "soccer_germany_bundesliga",
-    "bundesliga": "soccer_germany_bundesliga",
-    "fransa ligue 1": "soccer_france_ligue_one",
-    "ligue 1": "soccer_france_ligue_one",
-    "turkiye super lig": "soccer_turkey_super_league",
-    "super lig": "soccer_turkey_super_league",
-    "hollanda eredivisie": "soccer_netherlands_eredivisie",
-    "portekiz primeira liga": "soccer_portugal_primeira_liga",
-    "ingiltere championship": "soccer_efl_champ",
-    "uefa sampiyonlar ligi": "soccer_uefa_champs_league",
-    "sampiyonlar ligi": "soccer_uefa_champs_league",
-    "uefa avrupa ligi": "soccer_uefa_europa_league",
-    "avrupa ligi": "soccer_uefa_europa_league",
-    "uefa konferans ligi": "soccer_uefa_europa_conference_league",
-    "konferans ligi": "soccer_uefa_europa_conference_league",
-}
+# Verified (country, league) pairs mapped to The Odds API sport keys.
+# Prevents non-major leagues (e.g. Brezilya Serie A, Avusturya Bundesliga, Yunanistan Super Lig) from burning credits.
+VERIFIED_LEAGUE_SPORT_KEYS: list[tuple[tuple[str, ...], tuple[str, ...], str]] = [
+    (("ingiltere", "england", "eng", "gb", "uk"), ("premier lig", "premier league"), "soccer_epl"),
+    (("ingiltere", "england", "eng", "gb", "uk"), ("championship",), "soccer_efl_champ"),
+    (("ispanya", "spain", "esp", "es"), ("la liga", "laliga"), "soccer_spain_la_liga"),
+    (("italya", "italy", "ita", "it"), ("serie a",), "soccer_italy_serie_a"),
+    (("almanya", "germany", "ger", "de"), ("bundesliga",), "soccer_germany_bundesliga"),
+    (("fransa", "france", "fra", "fr"), ("ligue 1",), "soccer_france_ligue_one"),
+    (("turkiye", "turkey", "tur", "tr"), ("super lig",), "soccer_turkey_super_league"),
+    (("hollanda", "netherlands", "ned", "nl"), ("eredivisie",), "soccer_netherlands_eredivisie"),
+    (("portekiz", "portugal", "por", "pt"), ("primeira liga", "liga portugal"), "soccer_portugal_primeira_liga"),
+]
+UEFA_SPORT_KEYS: list[tuple[str, str]] = [
+    ("uefa sampiyonlar ligi", "soccer_uefa_champs_league"),
+    ("sampiyonlar ligi", "soccer_uefa_champs_league"),
+    ("champions league", "soccer_uefa_champs_league"),
+    ("uefa avrupa ligi", "soccer_uefa_europa_league"),
+    ("avrupa ligi", "soccer_uefa_europa_league"),
+    ("europa league", "soccer_uefa_europa_league"),
+    ("uefa konferans ligi", "soccer_uefa_europa_conference_league"),
+    ("konferans ligi", "soccer_uefa_europa_conference_league"),
+    ("conference league", "soccer_uefa_europa_conference_league"),
+]
 
 
 def _norm_league(name: str) -> str:
@@ -48,11 +50,26 @@ def _norm_league(name: str) -> str:
     return " ".join((name or "").translate(tr).lower().split())
 
 
-def _sport_key_for_league(league_name: str) -> Optional[str]:
-    norm = _norm_league(league_name)
-    for k, sport_key in LEAGUE_TO_ODDS_API_SPORT.items():
-        if k in norm:
+def _sport_key_for_league(league_name: str, country: str = "") -> Optional[str]:
+    if is_youth_or_women_match(league_name or "", "", ""):
+        return None
+    norm_lg = _norm_league(league_name)
+    norm_ct = _norm_league(country)
+    # Exclude explicit non-target countries/tiers even if country field is empty
+    if any(bad in norm_lg for bad in ("2.", "ii", "b ", "kadın", "kadin", "women", "u19", "u21", "u20", "u17")):
+        return None
+    for uefa_kw, sport_key in UEFA_SPORT_KEYS:
+        if uefa_kw in norm_lg:
             return sport_key
+    lg_words = set(re.findall(r"[a-z0-9]+", norm_lg))
+    ct_words = set(re.findall(r"[a-z0-9]+", norm_ct))
+    for countries, leagues, sport_key in VERIFIED_LEAGUE_SPORT_KEYS:
+        if any(lg in norm_lg for lg in leagues):
+            # Require exact country token match in country field or league name (never substring 'de' in 'bundesliga')
+            if norm_ct and any(c == norm_ct or c in ct_words for c in countries):
+                return sport_key
+            if not norm_ct and any(c in lg_words for c in countries):
+                return sport_key
     return None
 
 
@@ -143,6 +160,7 @@ def sync_the_odds_api(db: Session) -> dict[str, Any]:
         db.query(Match)
         .filter(
             Match.status == "SCHEDULED",
+            Match.is_major_league.is_(True),
             Match.start_time_utc >= now - timedelta(hours=1),
             Match.start_time_utc <= cutoff,
         )
@@ -151,7 +169,9 @@ def sync_the_odds_api(db: Session) -> dict[str, Any]:
 
     sport_keys_needed: set[str] = set()
     for m in upcoming_matches:
-        sk = _sport_key_for_league(m.league)
+        if is_youth_or_women_match(m.league or "", m.home_team or "", m.away_team or ""):
+            continue
+        sk = _sport_key_for_league(m.league, m.country or "")
         if sk:
             sport_keys_needed.add(sk)
 

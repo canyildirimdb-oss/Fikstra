@@ -168,9 +168,10 @@ export function computeCouponCheck(
   picksBySlot: Record<number, string>,
   lockedSlots: Record<number, boolean>,
   currentColumns: number,
-  currentProbs: TotoProbs
+  currentProbs: TotoProbs,
+  mode: "hit15" | "shield13" | "contrarian" = "hit15"
 ): CouponCheckResult {
-  // Exact DP optimization for currentColumns respecting locks
+  // Exact DP optimization for currentColumns respecting locks & active mode
   let dp = new Map<number, { score: number; picks: Record<number, string> }>();
   dp.set(1, { score: 0, picks: {} });
 
@@ -191,7 +192,17 @@ export function computeCouponCheck(
       for (const [k, code, prob] of choices) {
         const nc = cols * k;
         if (nc > currentColumns) continue;
-        const sc = state.score + Math.log(Math.max(prob, 1e-12));
+        let stepScore = Math.log(Math.max(prob, 1e-12));
+        if (mode === "contrarian" && k > 1) {
+          if (m.trap_signal?.is_trap) {
+            stepScore += 0.35 * (k - 1);
+          } else if (m.trap_signal && m.trap_signal.max_leverage >= 1.25) {
+            stepScore += 0.22 * (k - 1);
+          } else {
+            stepScore += ((m.chaos?.score ?? 50) / 100) * 0.2 * (k - 1);
+          }
+        }
+        const sc = state.score + stepScore;
         const prev = nextDp.get(nc);
         if (!prev || sc > prev.score + 1e-12) {
           nextDp.set(nc, { score: sc, picks: { ...state.picks, [m.slot_no]: code } });
@@ -215,6 +226,7 @@ export function computeCouponCheck(
       matches.map((m) => pickProbForCode(m, bestState!.picks[m.slot_no] || "1"))
     );
     const p15RelGain = currentProbs.p15 > 0 ? optProbs.p15 / currentProbs.p15 : optProbs.p15 > 0 ? 2 : 1;
+    const p13Gain = optProbs.p13_plus - currentProbs.p13_plus;
     const expGain = optProbs.expected_hits - currentProbs.expected_hits;
 
     const changed = matches
@@ -225,7 +237,14 @@ export function computeCouponCheck(
       })
       .filter((x) => x.fromCode !== x.toCode);
 
-    if (changed.length > 0 && (p15RelGain >= 1.05 || expGain >= 0.08)) {
+    const isMeaningfulImprovement =
+      mode === "shield13"
+        ? p13Gain >= 0.015
+        : mode === "contrarian"
+        ? p13Gain >= 0.015 || expGain >= 0.12
+        : p15RelGain >= 1.05 || expGain >= 0.08;
+
+    if (changed.length > 0 && isMeaningfulImprovement) {
       const downgraded = changed.find((c) => c.fromCode.length > c.toCode.length);
       const upgraded = changed.find((c) => c.fromCode.length < c.toCode.length);
       let message = "";

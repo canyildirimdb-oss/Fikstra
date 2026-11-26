@@ -104,6 +104,7 @@ export function MatchDetailDrawer({
 }: Props) {
   const [detail, setDetail] = useState<MatchDetail | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiExpanded, setAiExpanded] = useState(false);
   const [injuriesOpen, setInjuriesOpen] = useState(false);
@@ -154,8 +155,10 @@ export function MatchDetailDrawer({
   useEffect(() => {
     if (!matchId) {
       setDetail(null);
+      setError(null);
       return;
     }
+    setError(null);
     setAiExpanded(false);
     setInjuriesOpen(false);
     setModelOpen(false);
@@ -209,6 +212,12 @@ export function MatchDetailDrawer({
             .finally(() => {
               if (!cancelled) setAiLoading(false);
             });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDetail(null);
+          setError("Bu maç bulunamadı veya kaldırıldı.");
         }
       })
       .finally(() => {
@@ -384,7 +393,11 @@ export function MatchDetailDrawer({
                   </span>
                 </p>
                 <h3 className="text-base font-bold text-slate-100 mt-0.5 truncate">
-                  {detail ? `${detail.home_team} vs ${detail.away_team}` : "Yükleniyor..."}
+                  {detail
+                    ? `${detail.home_team} vs ${detail.away_team}`
+                    : error
+                    ? "Maç Bulunamadı"
+                    : "Yükleniyor..."}
                 </h3>
               </div>
               <button
@@ -398,7 +411,18 @@ export function MatchDetailDrawer({
 
             {/* Scrollable Body: Decision First, Evidence Second */}
             <div className="flex-1 overflow-y-auto p-5 space-y-4">
-              {loading || !detail ? (
+              {error ? (
+                <div className="p-8 text-center space-y-4">
+                  <p className="text-sm font-medium text-slate-300">{error}</p>
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="px-4 py-2 rounded-xl bg-[#131926] border border-[#1F2937] hover:border-slate-500 text-xs font-bold text-slate-200"
+                  >
+                    Kapat
+                  </button>
+                </div>
+              ) : loading || !detail ? (
                 <div className="p-8 text-center text-sm text-slate-400">Veriler yükleniyor...</div>
               ) : (
                 <>
@@ -626,7 +650,7 @@ export function MatchDetailDrawer({
                         {detail.context.ai_source && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300">
                             {detail.context.ai_source === "gemini"
-                              ? "Fikstra AI"
+                              ? "Fikstra Maç Özeti"
                               : "Fikstra Analiz Özeti"}
                           </span>
                         )}
@@ -642,7 +666,7 @@ export function MatchDetailDrawer({
                           ) : (
                             <Sparkles className="w-3.5 h-3.5" />
                           )}
-                          AI Özeti Getir
+                          Maç Özetini Getir
                         </button>
                       )}
                     </div>
@@ -652,7 +676,7 @@ export function MatchDetailDrawer({
                       }`}
                     >
                       {detail.context.ai_summary ||
-                        "Bu maç için yapay zeka / veri özeti henüz üretilmedi. Tek dokunuşla üretebilirsiniz."}
+                        "Bu maç için istatistik özeti henüz üretilmedi. Tek dokunuşla üretebilirsiniz."}
                     </p>
                     {detail.context.ai_summary && detail.context.ai_summary.length > 170 && (
                       <button
@@ -909,7 +933,7 @@ export function MatchDetailDrawer({
                                 <div className="flex justify-between text-[11px] mb-1 mono-nums">
                                   <span className="font-bold text-emerald-400">{hx.toFixed(2)}</span>
                                   <span className="text-slate-400 font-medium">
-                                    Beklenen Gol (xG)
+                                    Gol Beklentisi
                                   </span>
                                   <span className="font-bold text-cyan-400">{ax.toFixed(2)}</span>
                                 </div>
@@ -925,8 +949,8 @@ export function MatchDetailDrawer({
                           <div className="text-[11px] text-slate-300 mono-nums">
                             <span className="text-slate-400 mr-1.5">
                               {detail.context.xg_source === "espn_shots"
-                                ? "Şut Üretimi (ESPN):"
-                                : "True xG (Understat):"}
+                                ? "Şut Üretimi:"
+                                : "Şut Kalitesi Ortalaması:"}
                             </span>
                             <strong className="text-emerald-400">
                               Ev {detail.context.home_true_xg.toFixed(2)}
@@ -946,7 +970,7 @@ export function MatchDetailDrawer({
                           )}
                           {detail.top_prediction?.breakdown.kelly_units !== undefined && (
                             <span className="px-2 py-0.5 rounded bg-[#131926] border border-[#1F2937] text-[10px] font-semibold text-slate-200 mono-nums">
-                              Kelly: {detail.top_prediction.breakdown.kelly_units.toFixed(1)} / 5
+                              Önerilen Pay: {detail.top_prediction.breakdown.kelly_units.toFixed(1)} / 5
                             </span>
                           )}
                           {detail.top_prediction?.breakdown.home_rest_days != null &&
@@ -1229,6 +1253,7 @@ export function MatchDetailDrawer({
                         market_key: activePick.market_key,
                         selection_key: activePick.selection_key,
                         iddaa_odd: activePick.iddaa_odd,
+                        start_time_utc: detail.start_time_utc,
                       })
                     }
                     className={`flex-1 py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition-all mono-nums ${
@@ -1345,7 +1370,7 @@ export function MatchDetailDrawer({
                       ) : (
                         <>
                           <Copy className="w-3.5 h-3.5" />
-                          <span>Maç Linkini Kopyala (?match={detail?.match_id})</span>
+                          <span>Maç Bağlantısını Kopyala</span>
                         </>
                       )}
                     </button>

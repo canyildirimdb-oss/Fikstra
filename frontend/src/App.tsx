@@ -242,14 +242,14 @@ export function App() {
             continue;
           }
           validItems.push({
-            match_id: it.id,
-            prediction_id: it.id,
+            match_id: it.match_id ?? it.id,
+            prediction_id: it.prediction_id ?? it.id,
             home_team: it.home_team,
             away_team: it.away_team,
             market_key: it.market_key,
             selection_key: it.selection_key,
             iddaa_odd: it.odd,
-            start_time_utc: it.kickoff || undefined,
+            start_time_utc: it.start_time_utc ?? it.kickoff ?? undefined,
           });
         }
         if (validItems.length > 0) {

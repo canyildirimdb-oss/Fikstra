@@ -1,5 +1,7 @@
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from typing import Any
 
 from pywebpush import WebPushException, webpush
@@ -7,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Coupon, Match, NotificationLog, Prediction, PushSubscription
+from utils.formatting import format_pick_tr
 from utils.time_utils import tr_today_str
 
 logger = logging.getLogger(__name__)
@@ -34,9 +37,7 @@ def human_pick_label(
             return f"{away_team} Kazanır" if away_team else "Deplasman Kazanır"
         return "Beraberlik"
     if mk.startswith("AU_"):
-        line = mk.split("_", 1)[1] if "_" in mk else "2.5"
-        side = "Üst" if sk == "UST" else "Alt"
-        return f"{line} Gol {side}"
+        return format_pick_tr(mk, sk)
     if mk == "KG":
         return "Karşılıklı Gol Var" if sk == "VAR" else "Karşılıklı Gol Yok"
     if mk == "CS":
@@ -108,6 +109,49 @@ def format_coupon_settled_notification(coupon: Coupon, won_legs: int, total_legs
     return title, body, "/?tab=coupons"
 
 
+def send_push_to_all(
+    db: Session,
+    subs: list[PushSubscription],
+    payload: str,
+) -> int:
+    """Deliver Web Push payload concurrently with bounded workers and short timeout."""
+    if not subs or not (settings.vapid_private_key and settings.vapid_public_key):
+        return 0
+
+    def _send_one(sub_id: int, endpoint: str, p256dh: str, auth: str) -> tuple[int, bool, bool]:
+        sub_info = {"endpoint": endpoint, "keys": {"p256dh": p256dh, "auth": auth}}
+        try:
+            webpush(
+                subscription_info=sub_info,
+                data=payload,
+                vapid_private_key=settings.vapid_private_key,
+                vapid_claims={"sub": settings.vapid_subject},
+                timeout=4,
+            )
+            return sub_id, True, False
+        except WebPushException as exc:
+            gone = exc.response is not None and exc.response.status_code in (404, 410)
+            return sub_id, False, gone
+        except Exception as exc:
+            logger.warning("[Fikstra Push] Failed sending to %s: %s", endpoint[:60], exc)
+            return sub_id, False, False
+
+    sent_count = 0
+    sub_by_id = {s.id: s for s in subs}
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = [
+            pool.submit(_send_one, s.id, s.endpoint, s.p256dh, s.auth)
+            for s in subs
+        ]
+        for fut in as_completed(futures):
+            sub_id, ok, gone = fut.result()
+            if ok:
+                sent_count += 1
+            elif gone and sub_id in sub_by_id:
+                db.delete(sub_by_id[sub_id])
+    return sent_count
+
+
 def send_push_notification(
     db: Session,
     dedupe_key: str,
@@ -134,25 +178,7 @@ def send_push_notification(
                 "url": url,
             }
         )
-        for sub in subs:
-            sub_info = {
-                "endpoint": sub.endpoint,
-                "keys": {"p256dh": sub.p256dh, "auth": sub.auth},
-            }
-            try:
-                webpush(
-                    subscription_info=sub_info,
-                    data=payload,
-                    vapid_private_key=settings.vapid_private_key,
-                    vapid_claims={"sub": settings.vapid_subject},
-                    timeout=8,
-                )
-                sent_count += 1
-            except WebPushException as exc:
-                if exc.response is not None and exc.response.status_code in (404, 410):
-                    db.delete(sub)
-            except Exception as exc:
-                logger.warning("[Fikstra Push] Failed sending to %s: %s", sub.endpoint[:60], exc)
+        sent_count = send_push_to_all(db, subs, payload)
 
     db.add(
         NotificationLog(
@@ -186,12 +212,21 @@ def dispatch_sync_alerts(db: Session, coupons: list[Coupon]) -> list[dict[str, A
     (b) Sharp odds drop >= 7%
     (c) Daily coupons ready
     """
+    now_utc = datetime.now(timezone.utc)
     results: list[dict[str, Any]] = []
 
     high_conf = (
         db.query(Prediction)
         .join(Match, Prediction.match_id == Match.id)
-        .filter(Prediction.status == "PENDING", Prediction.confidence_score >= 82.0)
+        .filter(
+            Match.status == "SCHEDULED",
+            Match.start_time_utc > now_utc,
+            Prediction.status == "PENDING",
+            Prediction.is_top_pick.is_(True),
+            Prediction.iddaa_odd >= 1.30,
+            Prediction.iddaa_odd < 4.0,
+            Prediction.confidence_score >= 82.0,
+        )
         .order_by(Prediction.confidence_score.desc())
         .limit(5)
         .all()
@@ -204,7 +239,15 @@ def dispatch_sync_alerts(db: Session, coupons: list[Coupon]) -> list[dict[str, A
     sharp_drops = (
         db.query(Prediction)
         .join(Match, Prediction.match_id == Match.id)
-        .filter(Prediction.status == "PENDING", Prediction.odds_drop_pct >= 7.0)
+        .filter(
+            Match.status == "SCHEDULED",
+            Match.start_time_utc > now_utc,
+            Prediction.status == "PENDING",
+            Prediction.is_top_pick.is_(True),
+            Prediction.iddaa_odd >= 1.30,
+            Prediction.iddaa_odd < 4.0,
+            Prediction.odds_drop_pct >= 7.0,
+        )
         .order_by(Prediction.odds_drop_pct.desc())
         .limit(5)
         .all()

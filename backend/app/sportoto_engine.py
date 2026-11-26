@@ -49,14 +49,25 @@ def pick_prob_for_code(p1: float, px: float, p2: float, code: str) -> float:
     return float(min(1.0, max(0.0, total)))
 
 
-def compute_chaos_score(p1: float, px: float, p2: float) -> dict[str, Any]:
-    """Normalized Shannon entropy (0-100) + calibrated 4-tier volatility label based on max_p."""
-    entropy = 0.0
-    for p in (p1, px, p2):
-        if p > 1e-12:
-            entropy -= p * math.log(p)
-    score = round(min(100.0, max(0.0, (entropy / math.log(3.0)) * 100.0)), 1)
+def compute_chaos_score(
+    p1: float,
+    px: float,
+    p2: float,
+    public_pcts: Optional[tuple[Optional[float], Optional[float], Optional[float]]] = None,
+) -> dict[str, Any]:
+    """Spread chaos score across 0-100 using (1 - p_top1) and optional public/model divergence."""
     max_p = max(float(p1), float(px), float(p2))
+    base_score = min(85.0, max(0.0, ((1.0 - max_p) / 0.67) * 85.0))
+    div_bonus = 0.0
+    if public_pcts and all(v is not None and float(v) > 0.0 for v in public_pcts):
+        raw_pub = [float(public_pcts[0]), float(public_pcts[1]), float(public_pcts[2])]  # type: ignore[arg-type]
+        s = sum(raw_pub)
+        if 95.0 <= s <= 105.0:
+            pub_norm = [v / s for v in raw_pub]
+            true_probs = [float(p1), float(px), float(p2)]
+            max_div_pct = max(abs(pub_norm[i] - true_probs[i]) * 100.0 for i in range(3))
+            div_bonus = min(15.0, max_div_pct * 0.6)
+    score = round(min(100.0, max(0.0, base_score + div_bonus)), 1)
     if max_p >= 0.65:
         label = "Banko"
     elif max_p >= 0.50:
@@ -310,7 +321,12 @@ def optimize_toto(
             lkind = "single" if lk == 1 else ("double" if lk == 2 else "triple")
             per_match_choices.append([(lk, lcode, lprob, math.log(max(lprob, 1e-12)), lkind)])
         else:
-            chaos = compute_chaos_score(p1, px, p2)["score"]
+            chaos = compute_chaos_score(
+                p1,
+                px,
+                p2,
+                public_pcts=(m.get("public_pct_1"), m.get("public_pct_x"), m.get("public_pct_2")),
+            )["score"]
             trap = compute_trap_signal(
                 (p1, px, p2),
                 (m.get("public_pct_1"), m.get("public_pct_x"), m.get("public_pct_2")),
@@ -764,7 +780,12 @@ def serialize_sportoto_week(week: SportotoWeek, include_plans: bool = True) -> d
     matches_payload: list[dict[str, Any]] = []
     for m in ordered:
         chaos = (
-            compute_chaos_score(m.prob_1, m.prob_x, m.prob_2)
+            compute_chaos_score(
+                m.prob_1,
+                m.prob_x,
+                m.prob_2,
+                public_pcts=(m.public_pct_1, m.public_pct_x, m.public_pct_2),
+            )
             if m.prob_1 is not None and m.prob_x is not None and m.prob_2 is not None
             else None
         )

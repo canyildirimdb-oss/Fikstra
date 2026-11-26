@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.config import settings
 from app.models import Coupon, CouponItem, Match, Prediction, ScraperCache, SportotoWeek, SyncLog, TelegramDispatch
 from app.sportoto_engine import serialize_sportoto_week
+from utils.formatting import format_pick_tr
 
 logger = logging.getLogger("fikstra.telegram")
 
@@ -76,9 +77,7 @@ def _format_pick_label(market_key: str, selection_key: str, home_team: str = "",
             return f"{away_team} · MS 2"
         return f"MS {sk}"
     if mk.startswith("AU_"):
-        line = mk.split("_", 1)[1] if "_" in mk else "2.5"
-        side = "Üst" if sk == "UST" else "Alt"
-        return f"{line} {side}"
+        return format_pick_tr(mk, sk)
     if mk == "KG":
         return "KG Var" if sk == "VAR" else "KG Yok"
     if mk == "CS":
@@ -332,7 +331,7 @@ def _render_single_message(pred: Prediction) -> tuple[str, dict[str, Any]]:
         f"🎯 Tercih: <b>{html.escape(pick_lbl)}</b>\n"
         f"💰 Oran: <b>{odd_val:.2f}</b> · Güven: <b>%{conf:.0f}</b>"
     )
-    return text, _inline_link_markup("Fikstra'da İncele", f"/?match={pred.id}")
+    return text, _inline_link_markup("Fikstra'da İncele", f"/?match={pred.match_id}")
 
 
 def _render_value_message(pred: Prediction) -> tuple[str, dict[str, Any]]:
@@ -357,7 +356,7 @@ def _render_value_message(pred: Prediction) -> tuple[str, dict[str, Any]]:
         f"💰 Oran: <b>{odd_val:.2f}</b> · Güven: <b>%{conf:.0f}</b>\n"
         f"{signal_block}"
     )
-    return text, _inline_link_markup("Fikstra'da İncele", f"/?match={pred.id}")
+    return text, _inline_link_markup("Fikstra'da İncele", f"/?match={pred.match_id}")
 
 
 def _tr_day_bounds_utc(now_utc: datetime) -> tuple[datetime, datetime]:
@@ -687,18 +686,30 @@ def dispatch_telegram_settlements(db: Session) -> dict[str, Any]:
                 y_end_utc = y_end_tr.astimezone(timezone.utc)
 
                 eff_conf = func.coalesce(Prediction.published_confidence, Prediction.confidence_score)
-                y_preds = (
-                    db.query(Prediction)
+                has_pending_y = (
+                    db.query(Prediction.id)
                     .join(Match, Prediction.match_id == Match.id)
                     .filter(
                         Match.start_time_utc >= y_start_utc,
                         Match.start_time_utc < y_end_utc,
                         Prediction.is_top_pick.is_(True),
                         eff_conf >= 60.0,
+                        Prediction.status == "PENDING",
                     )
-                    .all()
-                )
-                if y_preds and all(p.status in {"WON", "LOST", "VOID"} for p in y_preds):
+                    .first()
+                ) is not None
+                from app.routers.api import _get_official_settled_predictions
+                official_settled = _get_official_settled_predictions(db, include_void=True, order_asc=False)
+                y_preds = []
+                for p in official_settled:
+                    if not p.match or not p.match.start_time_utc:
+                        continue
+                    ms = p.match.start_time_utc
+                    if ms.tzinfo is None:
+                        ms = ms.replace(tzinfo=timezone.utc)
+                    if y_start_utc <= ms < y_end_utc:
+                        y_preds.append(p)
+                if y_preds and not has_pending_y:
                     won = sum(1 for p in y_preds if p.status == "WON")
                     lost = sum(1 for p in y_preds if p.status == "LOST")
                     void = sum(1 for p in y_preds if p.status == "VOID")
@@ -744,20 +755,17 @@ def dispatch_telegram_settlements(db: Session) -> dict[str, Any]:
                 w_start_utc = week_start_tr.astimezone(timezone.utc)
                 w_end_utc = week_end_tr.astimezone(timezone.utc)
 
-                eff_conf = func.coalesce(Prediction.published_confidence, Prediction.confidence_score)
-                w_preds = (
-                    db.query(Prediction)
-                    .options(joinedload(Prediction.match))
-                    .join(Match, Prediction.match_id == Match.id)
-                    .filter(
-                        Match.start_time_utc >= w_start_utc,
-                        Match.start_time_utc < w_end_utc,
-                        Prediction.is_top_pick.is_(True),
-                        eff_conf >= 60.0,
-                        Prediction.status.in_(["WON", "LOST", "VOID"]),
-                    )
-                    .all()
-                )
+                from app.routers.api import _get_official_settled_predictions
+                official_settled = _get_official_settled_predictions(db, include_void=True, order_asc=False)
+                w_preds = []
+                for p in official_settled:
+                    if not p.match or not p.match.start_time_utc:
+                        continue
+                    ms = p.match.start_time_utc
+                    if ms.tzinfo is None:
+                        ms = ms.replace(tzinfo=timezone.utc)
+                    if w_start_utc <= ms < w_end_utc:
+                        w_preds.append(p)
                 w_won = [p for p in w_preds if p.status == "WON"]
                 w_lost = [p for p in w_preds if p.status == "LOST"]
                 w_decided = len(w_won) + len(w_lost)
@@ -977,6 +985,7 @@ def check_and_send_health_alerts(db: Session) -> dict[str, Any]:
             db.query(Prediction.id)
             .filter(
                 Prediction.status == "VOID",
+                Prediction.is_top_pick.is_(True),
                 Prediction.settled_at.isnot(None),
                 Prediction.settled_at >= cutoff_24h,
             )
@@ -1144,9 +1153,9 @@ def handle_telegram_webhook(update: dict[str, Any], db: Session) -> dict[str, An
                 f"{idx}. <b>{html.escape(m.home_team)} - {html.escape(m.away_team)}</b>\n"
                 f"   🏆 {html.escape(m.league)} · 🕒 {_format_tr_dt(m.start_time_utc)}\n"
                 f"   🎯 {html.escape(pick_lbl)} (<code>{odd_val:.2f}</code>) · Güven <b>%{conf:.0f}</b> · "
-                f"<a href=\"{base_url}/?match={p.id}\">İncele</a>"
+                f"<a href=\"{base_url}/?match={p.match_id}\">İncele</a>"
             )
-            buttons.append([{"text": f"{m.home_team} - {m.away_team}", "url": f"{base_url}/?match={p.id}"}])
+            buttons.append([{"text": f"{m.home_team} - {m.away_team}", "url": f"{base_url}/?match={p.match_id}"}])
 
         _send_message(chat_id, "\n".join(lines), reply_markup={"inline_keyboard": buttons})
         return {"ok": True, "command": cmd, "count": len(preds)}
@@ -1182,19 +1191,17 @@ def handle_telegram_webhook(update: dict[str, Any], db: Session) -> dict[str, An
 
     if cmd == "/karne":
         cutoff_7d = now_utc - timedelta(days=7)
-        eff_conf = func.coalesce(Prediction.published_confidence, Prediction.confidence_score)
-        preds = (
-            db.query(Prediction)
-            .join(Match, Prediction.match_id == Match.id)
-            .filter(
-                Match.start_time_utc >= cutoff_7d,
-                Match.start_time_utc < now_utc,
-                Prediction.is_top_pick.is_(True),
-                eff_conf >= 60.0,
-                Prediction.status.in_(["WON", "LOST", "VOID"]),
-            )
-            .all()
-        )
+        from app.routers.api import _get_official_settled_predictions
+        official_settled = _get_official_settled_predictions(db, include_void=True, order_asc=False)
+        preds = []
+        for p in official_settled:
+            if not p.match or not p.match.start_time_utc:
+                continue
+            ms = p.match.start_time_utc
+            if ms.tzinfo is None:
+                ms = ms.replace(tzinfo=timezone.utc)
+            if cutoff_7d <= ms < now_utc:
+                preds.append(p)
         won = sum(1 for p in preds if p.status == "WON")
         lost = sum(1 for p in preds if p.status == "LOST")
         void = sum(1 for p in preds if p.status == "VOID")

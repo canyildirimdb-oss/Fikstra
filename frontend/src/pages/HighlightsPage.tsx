@@ -98,7 +98,7 @@ export function HighlightsPage({
         todayOnly,
         majorOnly: false,
         minOdd: 1.3,
-        minConfidence: 0,
+        minConfidence: 60,
         search,
       })
       .then((res) => {

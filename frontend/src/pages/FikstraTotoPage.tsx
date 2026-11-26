@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -94,9 +94,14 @@ export function FikstraTotoPage({
     setTimeout(() => setToast(null), 2400);
   };
 
+  const loadedWeekIdRef = useRef<number | null>(null);
+  const TOTO_DRAFT_PREFIX = "fikstra_toto_draft_v1:";
+
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    if (loadedWeekIdRef.current === null) {
+      setLoading(true);
+    }
     Promise.all([api.getSportotoCurrent(), api.getSportotoHistory()])
       .then(([cur, hist]) => {
         if (cancelled) return;
@@ -105,28 +110,67 @@ export function FikstraTotoPage({
 
         if (cur.active && cur.week) {
           const defaultPlan = cur.week.plans?.["32"] || cur.week.plans?.["16"];
-          const nextPicks: Record<number, string> = {};
           const planBaseline: Record<number, string> = {};
           if (defaultPlan) {
             for (const pk of defaultPlan.picks) {
               planBaseline[pk.slot_no] = pk.pick_code;
             }
           }
+          setBaselinePicks(planBaseline);
+
+          const isSameWeek = loadedWeekIdRef.current === cur.week.id;
+          loadedWeekIdRef.current = cur.week.id;
+
           if (initialSlipParam) {
+            const nextPicks: Record<number, string> = {};
             const parts = initialSlipParam.split(",").map((s) => s.trim());
             cur.week.matches.forEach((m, idx) => {
               nextPicks[m.slot_no] = canonicalPickCode(parts[idx] || "1");
             });
             onConsumeSlipParam();
-          } else if (defaultPlan) {
-            Object.assign(nextPicks, planBaseline);
-          } else {
-            for (const m of cur.week.matches) {
-              nextPicks[m.slot_no] = "1";
-            }
+            setPicksBySlot(nextPicks);
+            return;
           }
-          setBaselinePicks(planBaseline);
-          setPicksBySlot(nextPicks);
+
+          if (isSameWeek) {
+            return;
+          }
+
+          let restored = false;
+          try {
+            const rawDraft = localStorage.getItem(`${TOTO_DRAFT_PREFIX}${cur.week.id}`);
+            if (rawDraft) {
+              const parsed = JSON.parse(rawDraft) as {
+                picksBySlot?: Record<number, string>;
+                lockedSlots?: Record<number, boolean>;
+                budget?: number;
+                mode?: "hit15" | "shield13" | "contrarian";
+              };
+              if (parsed && parsed.picksBySlot && Object.keys(parsed.picksBySlot).length > 0) {
+                setPicksBySlot(parsed.picksBySlot);
+                if (parsed.lockedSlots) setLockedSlots(parsed.lockedSlots);
+                if (typeof parsed.budget === "number") setBudget(parsed.budget);
+                if (parsed.mode && ["hit15", "shield13", "contrarian"].includes(parsed.mode)) {
+                  setMode(parsed.mode);
+                }
+                restored = true;
+              }
+            }
+          } catch {
+            // ignore corrupted draft
+          }
+
+          if (!restored) {
+            const nextPicks: Record<number, string> = {};
+            if (defaultPlan) {
+              Object.assign(nextPicks, planBaseline);
+            } else {
+              for (const m of cur.week.matches) {
+                nextPicks[m.slot_no] = "1";
+              }
+            }
+            setPicksBySlot(nextPicks);
+          }
         }
       })
       .catch(() => {
@@ -144,6 +188,18 @@ export function FikstraTotoPage({
   }, [refreshTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const week = current?.active ? current.week : null;
+
+  useEffect(() => {
+    if (!week || Object.keys(picksBySlot).length === 0) return;
+    try {
+      localStorage.setItem(
+        `${TOTO_DRAFT_PREFIX}${week.id}`,
+        JSON.stringify({ picksBySlot, lockedSlots, budget, mode })
+      );
+    } catch {
+      // ignore storage quota
+    }
+  }, [week, picksBySlot, lockedSlots, budget, mode]);
 
   // Single source of truth: 100% live from active picksBySlot & lockedSlots
   const liveStats = useMemo(() => {
@@ -165,7 +221,7 @@ export function FikstraTotoPage({
     }
 
     const probs = exactPoissonBinomial(pickProbs);
-    const couponCheck = computeCouponCheck(week.matches, picksBySlot, lockedSlots, cols, probs);
+    const couponCheck = computeCouponCheck(week.matches, picksBySlot, lockedSlots, cols, probs, mode);
     const survival = computeLiveSurvival(week.matches, picksBySlot);
     const colPrice = week.column_price || 10;
     return {
@@ -178,7 +234,7 @@ export function FikstraTotoPage({
       couponCheck,
       survival,
     };
-  }, [week, picksBySlot, lockedSlots]);
+  }, [week, picksBySlot, lockedSlots, mode]);
 
   const hasLocksOrManualEdits = useMemo(() => {
     if (!week) return false;

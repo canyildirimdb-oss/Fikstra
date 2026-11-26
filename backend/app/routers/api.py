@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import json
 import threading
 import time
@@ -34,6 +35,7 @@ from scrapers.iddaa import is_youth_or_women_match
 from services.ai_summary import generate_match_summary
 from services.analyzer import MAX_HIGHLIGHT_ODD, MIN_ODD_RULE
 from services.sync import is_sync_running, run_sync_pipeline
+from utils.formatting import format_pick_tr
 from utils.time_utils import is_tr_today_or_next_24h, to_tr_datetime, tr_now, tr_today_str
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -42,6 +44,36 @@ API_CACHE_TTL_SEC = 60.0
 API_CACHE_MAX_ENTRIES = 200
 _API_CACHE: dict[str, tuple[float, Any]] = {}
 _API_CACHE_LOCK = threading.Lock()
+_RATE_BUCKETS: dict[str, list[float]] = {}
+_RATE_LOCK = threading.Lock()
+
+
+def _extract_client_ip(request: Request) -> str:
+    xff_parts = [p.strip() for p in (request.headers.get("x-forwarded-for") or "").split(",") if p.strip()]
+    if xff_parts:
+        return xff_parts[-1]
+    return request.client.host if request.client else "unknown"
+
+
+def _enforce_ip_rate_limit(request: Request, bucket: str, max_calls: int = 30, window_sec: float = 60.0) -> None:
+    ip = _extract_client_ip(request)
+    key = f"{bucket}:{ip}"
+    now_mono = time.monotonic()
+    with _RATE_LOCK:
+        hits = [ts for ts in _RATE_BUCKETS.get(key, []) if (now_mono - ts) < window_sec]
+        if len(hits) >= max_calls:
+            _RATE_BUCKETS[key] = hits
+            raise HTTPException(status_code=429, detail="Too many requests")
+        hits.append(now_mono)
+        _RATE_BUCKETS[key] = hits
+
+
+def _is_valid_cron_secret(x_cron_secret: Optional[str]) -> bool:
+    expected = (settings.cron_secret or "").strip()
+    provided = (x_cron_secret or "").strip()
+    if not expected or not provided:
+        return False
+    return hmac.compare_digest(provided, expected)
 
 
 def clear_api_cache() -> None:
@@ -136,8 +168,7 @@ def _serialize_ctx(ctx: Optional[MatchContext], expected_pick: Optional[str] = N
 
 
 def _build_match_detail_ctx(db: Session, m: Match, top_pred: Optional[Prediction]) -> dict:
-    from scrapers.external_data import fetch_global_team_recent_matches
-    from utils.cache import get_cached_json, set_cached_json
+    from utils.cache import get_cached_json
 
     ctx_out = _serialize_ctx(
         m.context,
@@ -145,58 +176,6 @@ def _build_match_detail_ctx(db: Session, m: Match, top_pred: Optional[Prediction
     )
     cache_key = f"recent_v4:{m.id}"
     cached_rm = get_cached_json(db, cache_key, ttl_hours=6.0)
-    if cached_rm is None:
-        cached_rm = {"home": [], "away": []}
-        try:
-            from concurrent.futures import ThreadPoolExecutor
-
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                f_h = pool.submit(
-                    fetch_global_team_recent_matches,
-                    m.home_team,
-                    match_start_utc=m.start_time_utc,
-                    prefer_home=True,
-                    db=None,
-                    timeout=5.0,
-                )
-                f_a = pool.submit(
-                    fetch_global_team_recent_matches,
-                    m.away_team,
-                    match_start_utc=m.start_time_utc,
-                    prefer_home=False,
-                    db=None,
-                    timeout=5.0,
-                )
-                h_prof = f_h.result()
-                a_prof = f_a.result()
-            cached_rm = {
-                "home": h_prof.get("recent_matches") or [],
-                "away": a_prof.get("recent_matches") or [],
-                "home_source": h_prof.get("source"),
-                "away_source": a_prof.get("source"),
-            }
-            if m.context:
-                changed = False
-                if h_prof.get("form"):
-                    hf_json = json.dumps(h_prof["form"])
-                    if m.context.home_form != hf_json:
-                        m.context.home_form = hf_json
-                        ctx_out["home_form"] = h_prof["form"]
-                        changed = True
-                if a_prof.get("form"):
-                    af_json = json.dumps(a_prof["form"])
-                    if m.context.away_form != af_json:
-                        m.context.away_form = af_json
-                        ctx_out["away_form"] = a_prof["form"]
-                        changed = True
-                if changed:
-                    db.commit()
-            if cached_rm["home"] or cached_rm["away"]:
-                set_cached_json(db, cache_key, cached_rm)
-                db.commit()
-        except Exception:
-            pass
-
     rm = cached_rm if isinstance(cached_rm, dict) else {"home": [], "away": []}
     ctx_out["home_recent_matches"] = rm.get("home") or []
     ctx_out["away_recent_matches"] = rm.get("away") or []
@@ -236,10 +215,8 @@ def _get_official_settled_predictions(
             eff_conf >= 60.0,
             eff_odd >= MIN_ODD_RULE,
             eff_odd < MAX_HIGHLIGHT_ODD,
-            or_(
-                Prediction.published_at.is_(None),
-                Prediction.published_at < Match.start_time_utc,
-            ),
+            Prediction.published_at.isnot(None),
+            Prediction.published_at < Match.start_time_utc,
         )
     )
     if order_asc:
@@ -382,6 +359,8 @@ def get_predictions(
         return cached
 
     kickoff_lock = datetime.now(timezone.utc) + timedelta(minutes=5)
+    eff_conf = func.coalesce(Prediction.published_confidence, Prediction.confidence_score)
+    eff_odd = func.coalesce(Prediction.published_odd, Prediction.iddaa_odd)
     q = (
         db.query(Prediction)
         .options(joinedload(Prediction.match).joinedload(Match.context))
@@ -390,17 +369,19 @@ def get_predictions(
             Match.status == "SCHEDULED",
             Match.start_time_utc > kickoff_lock,
             Prediction.status == "PENDING",
-            Prediction.iddaa_odd >= max(MIN_ODD_RULE, min_odd),
-            Prediction.iddaa_odd < MAX_HIGHLIGHT_ODD,
-            Prediction.confidence_score >= min_confidence,
+            eff_odd >= max(MIN_ODD_RULE, min_odd),
+            eff_odd < MAX_HIGHLIGHT_ODD,
+            eff_conf >= min_confidence,
         )
     )
+    if min_confidence >= 60.0:
+        q = q.filter(Prediction.is_top_pick.is_(True))
     if major_only:
         q = q.filter(Match.is_major_league.is_(True))
     if market and market != "ALL":
         q = q.filter(Prediction.market_key == market)
 
-    preds = q.order_by(Prediction.confidence_score.desc()).all()
+    preds = q.order_by(Prediction.is_top_pick.desc(), eff_conf.desc()).all()
 
     search_low = (search or "").strip().lower()
     seen_matches: set[int] = set()
@@ -458,10 +439,13 @@ def get_predictions(
             "data_status": m.data_status,
             "market_key": p.market_key,
             "selection_key": p.selection_key,
-            "iddaa_odd": p.iddaa_odd,
+            "iddaa_odd": p.published_odd if p.published_odd is not None else p.iddaa_odd,
+            "current_odd": p.iddaa_odd,
             "opening_odd": curr_odd_row.opening_odd if curr_odd_row else p.iddaa_odd,
             "global_odd": p.global_odd,
-            "confidence_score": p.confidence_score,
+            "confidence_score": p.published_confidence if p.published_confidence is not None else p.confidence_score,
+            "published_odd": p.published_odd,
+            "published_confidence": p.published_confidence,
             "value_edge_pct": p.value_edge_pct,
             "odds_drop_pct": p.odds_drop_pct,
             "breakdown": bd,
@@ -573,7 +557,7 @@ def create_or_get_ai_summary(
     m = db.query(Match).filter(Match.id == match_id).first()
     if not m:
         raise HTTPException(status_code=404, detail="Match not found")
-    effective_force = bool(force and x_cron_secret and x_cron_secret == settings.cron_secret)
+    effective_force = bool(force and _is_valid_cron_secret(x_cron_secret))
     text, src = generate_match_summary(db, m, force_refresh=effective_force)
     return {"match_id": m.id, "ai_summary": text, "ai_source": src}
 
@@ -588,37 +572,11 @@ def trigger_manual_refresh(
     x_cron_secret: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
+    if not _is_valid_cron_secret(x_cron_secret):
+        raise HTTPException(status_code=403, detail="Invalid cron secret")
+
     if is_sync_running(db):
         return {"status": "already_running"}
-
-    is_cron = bool(x_cron_secret and x_cron_secret == settings.cron_secret)
-    now = datetime.now(timezone.utc)
-
-    if not is_cron:
-        row = db.query(ScraperCache).filter(ScraperCache.cache_key == MANUAL_REFRESH_KEY).first()
-        if row and row.payload_json:
-            try:
-                last_iso = json.loads(row.payload_json).get("triggered_at")
-                if last_iso:
-                    last_dt = datetime.fromisoformat(last_iso)
-                    if last_dt.tzinfo is None:
-                        last_dt = last_dt.replace(tzinfo=timezone.utc)
-                    elapsed = (now - last_dt).total_seconds()
-                    if elapsed < MANUAL_REFRESH_COOLDOWN_SEC:
-                        return {
-                            "status": "cooldown",
-                            "retry_after_sec": max(1, int(MANUAL_REFRESH_COOLDOWN_SEC - elapsed)),
-                        }
-            except (ValueError, json.JSONDecodeError):
-                pass
-
-        payload = json.dumps({"triggered_at": now.isoformat()})
-        if row:
-            row.payload_json = payload
-            row.updated_at = now
-        else:
-            db.add(ScraperCache(cache_key=MANUAL_REFRESH_KEY, payload_json=payload, updated_at=now))
-        db.commit()
 
     background_tasks.add_task(run_sync_pipeline)
     return {"status": "started", "retry_after_sec": MANUAL_REFRESH_COOLDOWN_SEC}
@@ -947,18 +905,7 @@ def _market_group_label(market_key: str) -> str:
 
 
 def _format_pick_short(market_key: str, selection_key: str) -> str:
-    mk = (market_key or "").upper()
-    sk = (selection_key or "").upper()
-    if mk == "MS":
-        return f"MS {sk}"
-    if mk == "CS":
-        return f"ÇŞ {sk}"
-    if mk.startswith("AU_"):
-        line = mk.split("_", 1)[1] if "_" in mk else "2.5"
-        return f"{line} {'Üst' if sk == 'UST' else 'Alt'}"
-    if mk == "KG":
-        return "KG Var" if sk == "VAR" else "KG Yok"
-    return f"{market_key} {selection_key}".strip()
+    return format_pick_tr(market_key, selection_key)
 
 
 def _compute_performance_breakdown(db: Session) -> dict[str, list[dict[str, Any]]]:
@@ -1049,10 +996,13 @@ def get_predictions_batch_status(
         m = p.match
         items.append({
             "id": p.id,
+            "prediction_id": p.id,
+            "match_id": p.match_id,
             "home_team": m.home_team,
             "away_team": m.away_team,
             "league": m.league,
             "kickoff": m.start_time_utc.isoformat() if m.start_time_utc else None,
+            "start_time_utc": m.start_time_utc.isoformat() if m.start_time_utc else None,
             "pick": _format_pick_short(p.market_key, p.selection_key),
             "market_key": p.market_key,
             "selection_key": p.selection_key,
@@ -1113,8 +1063,7 @@ def get_active_announcements(db: Session = Depends(get_db)):
 
 
 def _client_hash(request: Request, prediction_id: int) -> str:
-    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-    client_ip = forwarded or (request.client.host if request.client else "unknown")
+    client_ip = _extract_client_ip(request)
     ua = (request.headers.get("user-agent") or "")[:60]
     salt = settings.cron_secret or "fikstra-pulse-salt"
     raw = f"{client_ip}|{ua}|{prediction_id}|{salt}"
@@ -1201,6 +1150,7 @@ def vote_prediction_pulse(
     request: Request,
     db: Session = Depends(get_db),
 ):
+    _enforce_ip_rate_limit(request, "pulse_vote", max_calls=30, window_sec=60.0)
     choice = (payload.choice or "").strip().lower()
     if choice not in {"agree", "risky"}:
         raise HTTPException(status_code=400, detail="choice must be 'agree' or 'risky'")
@@ -1231,6 +1181,7 @@ def record_prediction_slip_add(
     request: Request,
     db: Session = Depends(get_db),
 ):
+    _enforce_ip_rate_limit(request, "pulse_slip_add", max_calls=30, window_sec=60.0)
     pred = db.query(Prediction.id).filter(Prediction.id == prediction_id).first()
     if not pred:
         raise HTTPException(status_code=404, detail="Prediction not found")
