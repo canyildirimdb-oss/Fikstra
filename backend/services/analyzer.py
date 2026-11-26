@@ -812,7 +812,7 @@ def analyze_upcoming_matches(db: Session) -> int:
                 worst_deficit = max(ev_deficit, global_deficit)
                 neg_ev_penalty = round(min(15.0, 8.0 + worst_deficit * 50.0), 1)
                 total_score -= neg_ev_penalty
-                total_score = min(total_score, 63.5)
+                total_score = min(total_score, 59.5)
 
             # Motor v5.0: Goal stability / variance adjustment on AU_* and KG markets
             goal_std_adj = 0.0
