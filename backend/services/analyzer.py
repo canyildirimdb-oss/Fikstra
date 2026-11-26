@@ -803,16 +803,26 @@ def analyze_upcoming_matches(db: Session) -> int:
                 elif (odd.market_key == "MS" and odd.selection_key == "2") or (odd.market_key == "CS" and odd.selection_key == "X2"):
                     total_score -= elo_nudge
 
-            # Negative Expected Value (EV) guard: penalize clearly negative EV picks (-8 to -15 pts)
+            # Negative Expected Value (EV) guard:
+            # Allow Iddaa's structural vig band (ev_ratio >= 0.85 and edge_pct >= -10.5%)
+            # without trapping strong-probability picks under 59.5;
+            # penalize deeper negative EV (>10.5% below sharp or ev_ratio < 0.85),
+            # and cap genuinely abusive-vig odds (< -14% or ev_ratio < 0.82) below 60.
             ev_ratio = round(true_prob * odd.iddaa_odd, 4)
             neg_ev_penalty = 0.0
-            if ev_ratio < 0.92 or (edge_pct is not None and edge_pct < -8.0):
-                ev_deficit = max(0.0, 0.92 - ev_ratio)
-                global_deficit = max(0.0, (-8.0 - edge_pct) / 100.0) if (edge_pct is not None and edge_pct < -8.0) else 0.0
+            if ev_ratio < 0.82 or (edge_pct is not None and edge_pct < -14.0):
+                ev_deficit = max(0.0, 0.82 - ev_ratio)
+                global_deficit = max(0.0, (-14.0 - edge_pct) / 100.0) if (edge_pct is not None and edge_pct < -14.0) else 0.0
                 worst_deficit = max(ev_deficit, global_deficit)
                 neg_ev_penalty = round(min(15.0, 8.0 + worst_deficit * 50.0), 1)
                 total_score -= neg_ev_penalty
                 total_score = min(total_score, 59.5)
+            elif ev_ratio < 0.85 or (edge_pct is not None and edge_pct < -10.5):
+                ev_deficit = max(0.0, 0.90 - ev_ratio)
+                global_deficit = max(0.0, (-10.5 - edge_pct) / 100.0) if (edge_pct is not None and edge_pct < -10.5) else 0.0
+                worst_deficit = max(ev_deficit, global_deficit)
+                neg_ev_penalty = round(min(13.5, 10.0 + worst_deficit * 140.0), 1)
+                total_score -= neg_ev_penalty
 
             # Motor v5.0: Goal stability / variance adjustment on AU_* and KG markets
             goal_std_adj = 0.0

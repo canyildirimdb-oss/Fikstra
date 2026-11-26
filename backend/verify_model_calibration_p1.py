@@ -253,9 +253,55 @@ def test_cal4_published_immutable():
     print("TEST_CAL4_PUBLISHED_IMMUTABLE: PASS")
 
 
+def test_cal5_iddaa_vig_band_not_trapped_at_595():
+    db = _make_db()
+    now = datetime.now(timezone.utc)
+    m = Match(
+        iddaa_id="cal5_vig_band",
+        home_team="Strong Home",
+        away_team="Weak Away",
+        league="Almanya Bundesliga",
+        country="Germany",
+        is_major_league=True,
+        start_time_utc=now + timedelta(hours=6),
+        status="SCHEDULED",
+    )
+    db.add(m)
+    db.flush()
+
+    db.add(
+        MatchContext(
+            match_id=m.id,
+            home_form=json.dumps(["W", "W", "D", "W", "W"]),
+            away_form=json.dumps(["L", "D", "L", "L", "W"]),
+            home_goals_avg=1.9,
+            away_goals_avg=0.9,
+            home_conceded_avg=0.8,
+            away_conceded_avg=1.6,
+            home_elo=1720.0,
+            away_elo=1580.0,
+        )
+    )
+    # Normal Iddaa vig (-7.38% vs sharp global odd 1.49): should reach 60+ honestly without faking edge/kelly
+    db.add_all([
+        OddsCurrent(match_id=m.id, market_key="MS", selection_key="1", iddaa_odd=1.38, opening_odd=1.40, global_avg_odd=1.49),
+        OddsCurrent(match_id=m.id, market_key="MS", selection_key="X", iddaa_odd=4.30, opening_odd=4.30, global_avg_odd=4.60),
+        OddsCurrent(match_id=m.id, market_key="MS", selection_key="2", iddaa_odd=6.20, opening_odd=6.20, global_avg_odd=6.80),
+    ])
+    db.commit()
+
+    analyze_upcoming_matches(db)
+    pred = db.query(Prediction).filter(Prediction.match_id == m.id, Prediction.selection_key == "1").one()
+    assert pred.confidence_score >= 60.0, f"Expected Iddaa vig-band strong pick >= 60, got {pred.confidence_score}"
+    assert pred.value_edge_pct is not None and pred.value_edge_pct < 0.0, f"Expected honest negative edge, got {pred.value_edge_pct}"
+    assert pred.kelly_units == 0.0, f"Expected 0.0 Kelly on negative EV, got {pred.kelly_units}"
+    print("TEST_CAL5_IDDAA_VIG_BAND_NOT_TRAPPED: PASS")
+
+
 if __name__ == "__main__":
     test_cal1_no_free_kg_bias()
     test_cal2_negative_ev_guard()
     test_cal3_no_double_home_elo()
     test_cal4_published_immutable()
+    test_cal5_iddaa_vig_band_not_trapped_at_595()
     print("ALL PAKET 2 CALIBRATION TESTS PASSED")
