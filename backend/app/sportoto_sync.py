@@ -375,9 +375,9 @@ def sync_sportoto_auto(db: Session, *, trigger_notifications: bool = True) -> di
     events: list[dict[str, Any]] = bulletin["events"]
 
     sb_odds_events = _fetch_iddaa_sportsbook_odds()
+    # Load lightweight Match rows only (no Cartesian joinedload -> 512MB RAM safe)
     candidates = (
         db.query(Match)
-        .options(joinedload(Match.predictions), joinedload(Match.odds_current))
         .filter(Match.start_time_utc >= now_utc - timedelta(days=4))
         .all()
     )
@@ -424,6 +424,9 @@ def sync_sportoto_auto(db: Session, *, trigger_notifications: bool = True) -> di
         odd_2 = item.get("odd_2") or (sb_match["odd_2"] if sb_match else None)
 
         if best_match is not None:
+            # Load only MS/top predictions & MS odds for this single matched row
+            _ = best_match.predictions
+            _ = best_match.odds_current
             probs, db_src, pred_id = _extract_ms_probs_from_match(best_match)
             if probs is not None:
                 prob_1, prob_x, prob_2 = round(probs[0], 6), round(probs[1], 6), round(probs[2], 6)
