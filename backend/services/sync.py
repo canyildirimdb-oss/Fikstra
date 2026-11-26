@@ -686,25 +686,51 @@ def refresh_all_active_forms(
             "elapsed_sec": 0.0,
         }
 
-    # Determine which teams need fetching (reuse 2h global_team_recent:v4 cache when not bypassed)
-    team_tasks: dict[str, tuple[str, datetime, Optional[bool]]] = {}
+    # Bulk-load 2h global_team_recent:v4 cache in 1 SQL query
+    now_utc = datetime.now(timezone.utc)
+    cutoff_2h = now_utc - timedelta(hours=2)
     cached_results: dict[str, dict[str, Any]] = {}
-    for m in scheduled:
-        if only_missing:
-            existing_rm = get_cached_json(db, f"recent_v4:{m.id}", ttl_hours=6.0)
-            if isinstance(existing_rm, dict) and (existing_rm.get("home") or existing_rm.get("away")):
+    if not force_refresh:
+        for row in db.query(ScraperCache).filter(ScraperCache.cache_key.like("global_team_recent:v4:%")).all():
+            if not row.updated_at:
                 continue
+            upd = row.updated_at.replace(tzinfo=timezone.utc) if row.updated_at.tzinfo is None else row.updated_at
+            if upd < cutoff_2h:
+                continue
+            nk = row.cache_key.removeprefix("global_team_recent:v4:")
+            try:
+                payload = json.loads(row.payload_json)
+                if isinstance(payload, dict) and payload.get("recent_matches"):
+                    cached_results[nk] = payload
+            except Exception:
+                pass
+
+    existing_recent_mids: set[int] = set()
+    if only_missing:
+        cutoff_6h = now_utc - timedelta(hours=6)
+        for row in db.query(ScraperCache).filter(ScraperCache.cache_key.like("recent_v4:%")).all():
+            if not row.updated_at:
+                continue
+            upd = row.updated_at.replace(tzinfo=timezone.utc) if row.updated_at.tzinfo is None else row.updated_at
+            if upd < cutoff_6h:
+                continue
+            try:
+                mid_int = int(row.cache_key.removeprefix("recent_v4:"))
+                payload = json.loads(row.payload_json)
+                if isinstance(payload, dict) and (payload.get("home") or payload.get("away")):
+                    existing_recent_mids.add(mid_int)
+            except Exception:
+                pass
+
+    team_tasks: dict[str, tuple[str, datetime, Optional[bool]]] = {}
+    for m in scheduled:
+        if only_missing and m.id in existing_recent_mids:
+            continue
         for tname, pref_home in ((m.home_team, True), (m.away_team, False)):
             nk = normalize_team_name(tname)
-            if not nk:
+            if not nk or nk in cached_results or nk in team_tasks:
                 continue
-            if not force_refresh:
-                c_team = get_cached_json(db, f"global_team_recent:v4:{nk}", ttl_hours=2.0)
-                if isinstance(c_team, dict) and c_team.get("recent_matches"):
-                    cached_results[nk] = c_team
-                    continue
-            if nk not in team_tasks and nk not in cached_results:
-                team_tasks[nk] = (tname, m.start_time_utc, pref_home)
+            team_tasks[nk] = (tname, m.start_time_utc, pref_home)
 
     if not team_tasks and only_missing:
         return {
@@ -738,7 +764,7 @@ def refresh_all_active_forms(
         pool = ThreadPoolExecutor(max_workers=8)
         future_map = {pool.submit(_fetch_team, item): item[0] for item in team_tasks.items()}
         try:
-            for fut in as_completed(future_map, timeout=35.0):
+            for fut in as_completed(future_map, timeout=25.0):
                 try:
                     nk, res = fut.result()
                 except Exception:
@@ -755,6 +781,12 @@ def refresh_all_active_forms(
     covered_teams: set[str] = set()
     all_teams: set[str] = set()
 
+    # Bulk-load MatchContext rows in 1 SQL query
+    ctx_by_mid = {
+        c.match_id: c
+        for c in db.query(MatchContext).filter(MatchContext.match_id.in_([m.id for m in scheduled])).all()
+    }
+
     for m in scheduled:
         hk = normalize_team_name(m.home_team)
         ak = normalize_team_name(m.away_team)
@@ -766,10 +798,11 @@ def refresh_all_active_forms(
         if not force_refresh and (h_res is None or a_res is None):
             continue
 
-        ctx = db.query(MatchContext).filter(MatchContext.match_id == m.id).first()
+        ctx = ctx_by_mid.get(m.id)
         if not ctx:
             ctx = MatchContext(match_id=m.id)
             db.add(ctx)
+            ctx_by_mid[m.id] = ctx
 
         if h_res and h_res.get("recent_matches"):
             ctx.home_form = json.dumps(h_res["form"])
