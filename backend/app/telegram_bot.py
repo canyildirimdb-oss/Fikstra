@@ -13,7 +13,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
-from app.models import Coupon, CouponItem, Match, Prediction, ScraperCache, SyncLog, TelegramDispatch
+from app.models import Coupon, CouponItem, Match, Prediction, ScraperCache, SportotoWeek, SyncLog, TelegramDispatch
+from app.sportoto_optimizer import serialize_sportoto_week
 
 logger = logging.getLogger("fikstra.telegram")
 
@@ -1227,3 +1228,72 @@ def handle_telegram_webhook(update: dict[str, Any], db: Session) -> dict[str, An
         "Bilinmeyen komut. Kullanılabilir komutlar için /yardim yazabilirsin.",
     )
     return {"ok": True, "command": cmd, "unknown": True}
+
+
+def dispatch_sportoto_week(db: Session, week_id: int) -> dict[str, Any]:
+    """Send 15-match Spor Toto optimization summary once to TELEGRAM_TOPIC_COUPONS."""
+    week = (
+        db.query(SportotoWeek)
+        .options(joinedload(SportotoWeek.matches))
+        .filter(SportotoWeek.id == week_id)
+        .first()
+    )
+    if not week:
+        return {"ok": False, "sent": False, "error": "week_not_found"}
+    if week.status not in ("PUBLISHED", "SETTLED"):
+        return {"ok": False, "sent": False, "error": "week_not_published"}
+
+    dkey = f"sportoto:{week.id}"
+    if db.query(TelegramDispatch.id).filter(TelegramDispatch.dispatch_key == dkey).first():
+        return {"ok": True, "sent": False, "reason": "already_sent"}
+
+    if not _is_enabled():
+        return {"ok": False, "sent": False, "reason": "telegram_disabled"}
+
+    payload = serialize_sportoto_week(week, include_plans=True)
+    plans = payload.get("plans") or {}
+    if not plans:
+        return {"ok": False, "sent": False, "error": "incomplete_matches"}
+
+    lines = [f"🎯 <b>SPOR TOTO 15'Lİ — {html.escape(week.title)}</b>\n"]
+    p32 = plans.get("32") or {}
+    picks_32 = {p["slot_no"]: p["pick_code"] for p in p32.get("picks", [])}
+    for m in payload["matches"]:
+        slot = m["slot_no"]
+        pick = picks_32.get(slot, "-")
+        lines.append(
+            f"{slot:02d}. {html.escape(m['home_team'])} - {html.escape(m['away_team'])} → <b>{html.escape(pick)}</b>"
+        )
+
+    lines.append("\n📐 <b>Matematiksel Kolon Şablonları</b>")
+    for b in ("16", "32", "64"):
+        pl = plans.get(b)
+        if not pl:
+            continue
+        lines.append(
+            f"• <b>{b} Kolon</b> ({pl['used_columns']} kul.): "
+            f"{pl['single_count']} Tek / {pl['double_count']} Çifte / {pl['triple_count']} Kapalı · "
+            f"Beklenen <b>{pl['expected_hits']:.1f}/15</b>"
+        )
+
+    text = "\n".join(lines)
+    markup = _inline_link_markup("Spor Toto 15'liyi İncele", "/?tab=coupons&view=sportoto")
+    chat_id = settings.telegram_chat_id.strip()
+    thread_id = _parse_topic_id(settings.telegram_topic_coupons)
+    msg_id = _send_message(chat_id, text, thread_id=thread_id, reply_markup=markup)
+    if not msg_id:
+        return {"ok": False, "sent": False, "error": "telegram_send_failed"}
+
+    db.add(
+        TelegramDispatch(
+            dispatch_key=dkey,
+            kind="sportoto",
+            chat_id=chat_id,
+            thread_id=thread_id,
+            message_id=msg_id,
+            content_hash=_compute_hash(text, markup),
+            settled_replied=True,
+        )
+    )
+    db.commit()
+    return {"ok": True, "sent": True, "message_id": msg_id}

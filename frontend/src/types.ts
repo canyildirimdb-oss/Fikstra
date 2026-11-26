@@ -355,3 +355,74 @@ export interface AdminOverviewData {
   }[];
   announcements: SiteAnnouncement[];
 }
+
+export interface SportotoPick {
+  slot_no: number;
+  pick_code: string;
+  pick_prob: number;
+  kind: "single" | "double" | "triple";
+  hit: boolean | null;
+}
+
+export interface SportotoPlan {
+  budget: number;
+  used_columns: number;
+  single_count: number;
+  double_count: number;
+  triple_count: number;
+  expected_hits: number;
+  full_hit_prob_pct: number;
+  settled_count: number;
+  hits: number | null;
+  picks: SportotoPick[];
+}
+
+export interface SportotoMatchItem {
+  id: number;
+  slot_no: number;
+  home_team: string;
+  away_team: string;
+  prediction_id: number | null;
+  source: "fikstra_model" | "market_devig" | "missing";
+  odd_1: number | null;
+  odd_x: number | null;
+  odd_2: number | null;
+  prob_1: number | null;
+  prob_x: number | null;
+  prob_2: number | null;
+  actual_result: "1" | "X" | "2" | null;
+}
+
+export interface SportotoWeekData {
+  id: number;
+  title: string;
+  status: "DRAFT" | "PUBLISHED" | "SETTLED";
+  published_at: string | null;
+  created_at: string | null;
+  missing_count: number;
+  missing_slots: number[];
+  matches: SportotoMatchItem[];
+  plans: Record<"16" | "32" | "64", SportotoPlan> | null;
+}
+
+export interface SportotoCurrentResponse {
+  active: boolean;
+  week: SportotoWeekData | null;
+}
+
+export interface SportotoHistoryItem {
+  id: number;
+  title: string;
+  status: "DRAFT" | "PUBLISHED" | "SETTLED";
+  published_at: string | null;
+  settled_count: number;
+  plans_summary: Record<
+    string,
+    {
+      used_columns: number;
+      expected_hits: number;
+      hits: number | null;
+      settled_count: number;
+    }
+  >;
+}

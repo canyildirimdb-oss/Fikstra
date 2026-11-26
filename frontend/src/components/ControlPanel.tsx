@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { api } from "../api/client";
 import type { AdminOverviewData } from "../types";
+import { SportotoAdminPanel } from "./SportotoAdminPanel";
 
 const SESSION_SECRET_KEY = "fikstra_kontrol_secret";
 
@@ -482,6 +483,9 @@ export function ControlPanel({ onExit }: { onExit: () => void }) {
             </div>
           )}
         </div>
+
+        {/* 5. Spor Toto 15'li Management */}
+        <SportotoAdminPanel secret={secret} />
       </div>
     </div>
   );

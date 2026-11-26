@@ -9,6 +9,9 @@ import type {
   PredictionStatusItem,
   PulseData,
   SiteAnnouncement,
+  SportotoCurrentResponse,
+  SportotoHistoryItem,
+  SportotoWeekData,
 } from "../types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") || "";
@@ -150,5 +153,64 @@ export const api = {
     requestJson<{ status: string }>("/api/push/subscribe", {
       method: "POST",
       body: JSON.stringify(sub),
+    }),
+
+  getSportotoCurrent: () =>
+    requestJson<SportotoCurrentResponse>("/api/sportoto/current"),
+
+  getSportotoHistory: () =>
+    requestJson<{ items: SportotoHistoryItem[] }>("/api/sportoto/history"),
+
+  adminGetSportotoWeeks: (secret: string) =>
+    requestJson<{ items: SportotoWeekData[] }>("/api/admin/sportoto/weeks", {
+      headers: { "X-Cron-Secret": secret },
+    }),
+
+  adminParseSportoto: (secret: string, payload: { title: string; raw_text: string }) =>
+    requestJson<SportotoWeekData>("/api/admin/sportoto/parse", {
+      method: "POST",
+      headers: { "X-Cron-Secret": secret },
+      body: JSON.stringify(payload),
+    }),
+
+  adminPatchSportotoMatches: (
+    secret: string,
+    weekId: number,
+    payload: {
+      matches: {
+        slot_no: number;
+        odd_1?: number | null;
+        odd_x?: number | null;
+        odd_2?: number | null;
+        actual_result?: string | null;
+      }[];
+      auto_settle_from_db?: boolean;
+    }
+  ) =>
+    requestJson<SportotoWeekData>(`/api/admin/sportoto/weeks/${weekId}/matches`, {
+      method: "PATCH",
+      headers: { "X-Cron-Secret": secret },
+      body: JSON.stringify(payload),
+    }),
+
+  adminPublishSportoto: (secret: string, weekId: number) =>
+    requestJson<SportotoWeekData>(`/api/admin/sportoto/weeks/${weekId}/publish`, {
+      method: "POST",
+      headers: { "X-Cron-Secret": secret },
+    }),
+
+  adminTelegramSportoto: (secret: string, weekId: number) =>
+    requestJson<{ ok: boolean; sent: boolean; reason?: string; error?: string }>(
+      `/api/admin/sportoto/weeks/${weekId}/telegram`,
+      {
+        method: "POST",
+        headers: { "X-Cron-Secret": secret },
+      }
+    ),
+
+  adminDeleteSportoto: (secret: string, weekId: number) =>
+    requestJson<{ ok: boolean; deleted_id: number }>(`/api/admin/sportoto/weeks/${weekId}`, {
+      method: "DELETE",
+      headers: { "X-Cron-Secret": secret },
     }),
 };

@@ -52,10 +52,12 @@ function isControlPath(): boolean {
   return params.get("kontrol") === "1";
 }
 
-function parseInitialUrl(): { tab: TabKey; matchId: number | null } {
+type CouponsSubTab = "active" | "history" | "sportoto" | "tracked";
+
+function parseInitialUrl(): { tab: TabKey; matchId: number | null; couponsView: CouponsSubTab } {
   const path = window.location.pathname.toLowerCase();
   if (path === "/bulten" || path === "/bulletin") {
-    return { tab: "highlights", matchId: null };
+    return { tab: "highlights", matchId: null, couponsView: "active" };
   }
   const params = new URLSearchParams(window.location.search);
   const rawTab = params.get("tab");
@@ -63,10 +65,15 @@ function parseInitialUrl(): { tab: TabKey; matchId: number | null } {
     rawTab === "coupons" || rawTab === "performance" || rawTab === "highlights"
       ? rawTab
       : "highlights";
+  const rawView = params.get("view");
+  const couponsView: CouponsSubTab =
+    rawView === "sportoto" || rawView === "history" || rawView === "tracked"
+      ? rawView
+      : "active";
   const rawMatch = params.get("match");
   const parsedMatch = rawMatch ? Number(rawMatch) : NaN;
   const matchId = Number.isInteger(parsedMatch) && parsedMatch > 0 ? parsedMatch : null;
-  return { tab, matchId };
+  return { tab, matchId, couponsView };
 }
 
 const TABS: { key: TabKey; label: string; icon: typeof Flame }[] = [
@@ -97,6 +104,7 @@ function urlBase64ToUint8Array(base64String: string) {
 export function App() {
   const initialUrlRef = useRef(parseInitialUrl());
   const [tab, setTab] = useState<TabKey>(initialUrlRef.current.tab);
+  const [couponsView, setCouponsView] = useState<CouponsSubTab>(initialUrlRef.current.couponsView);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [selectedMatch, setSelectedMatch] = useState<{
     matchId: number;
@@ -281,6 +289,7 @@ export function App() {
     }
     const qs = new URLSearchParams();
     if (tab !== "highlights") qs.set("tab", tab);
+    if (tab === "coupons" && couponsView === "sportoto") qs.set("view", "sportoto");
     if (selectedMatch?.matchId) qs.set("match", String(selectedMatch.matchId));
     const nextUrl = qs.toString() ? `/?${qs.toString()}` : "/";
     const timer = window.setTimeout(() => {
@@ -290,7 +299,7 @@ export function App() {
       }
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [tab, selectedMatch]);
+  }, [tab, couponsView, selectedMatch, controlMode]);
 
   // Silent auto-refresh every 60s when tab is visible, and immediately on visibility/focus return
   useEffect(() => {
@@ -690,6 +699,8 @@ export function App() {
         )}
         {tab === "coupons" && (
           <CouponsPage
+            subTab={couponsView}
+            onSubTabChange={setCouponsView}
             slipItems={slipItems}
             stake={stake}
             onChangeStake={setStake}

@@ -25,8 +25,10 @@ from app.models import (
     Prediction,
     ScraperCache,
     SiteAnnouncement,
+    SportotoWeek,
     SyncLog,
 )
+from app.sportoto_optimizer import serialize_sportoto_week
 from scrapers.iddaa import is_youth_or_women_match
 from services.ai_summary import generate_match_summary
 from services.analyzer import MAX_HIGHLIGHT_ODD, MIN_ODD_RULE
@@ -1175,3 +1177,54 @@ def record_prediction_slip_add(
         db.add(MatchSlipAdd(prediction_id=prediction_id, client_hash=c_hash))
         db.commit()
     return {"ok": True}
+
+
+@router.get("/sportoto/current")
+def get_sportoto_current(db: Session = Depends(get_db)):
+    week = (
+        db.query(SportotoWeek)
+        .options(joinedload(SportotoWeek.matches))
+        .filter(SportotoWeek.status.in_(["PUBLISHED", "SETTLED"]))
+        .order_by(SportotoWeek.published_at.desc(), SportotoWeek.id.desc())
+        .first()
+    )
+    if not week:
+        return {"active": False, "week": None}
+    return {"active": True, "week": serialize_sportoto_week(week, include_plans=True)}
+
+
+@router.get("/sportoto/history")
+def get_sportoto_history(db: Session = Depends(get_db)):
+    weeks = (
+        db.query(SportotoWeek)
+        .options(joinedload(SportotoWeek.matches))
+        .filter(SportotoWeek.status.in_(["PUBLISHED", "SETTLED"]))
+        .order_by(SportotoWeek.published_at.desc(), SportotoWeek.id.desc())
+        .limit(10)
+        .all()
+    )
+    items = []
+    for w in weeks:
+        ser = serialize_sportoto_week(w, include_plans=True)
+        plans = ser.get("plans") or {}
+        plans_summary = {}
+        settled_count = 0
+        for b, pl in plans.items():
+            settled_count = pl.get("settled_count", 0)
+            plans_summary[b] = {
+                "used_columns": pl.get("used_columns"),
+                "expected_hits": pl.get("expected_hits"),
+                "hits": pl.get("hits"),
+                "settled_count": settled_count,
+            }
+        items.append(
+            {
+                "id": ser["id"],
+                "title": ser["title"],
+                "status": ser["status"],
+                "published_at": ser["published_at"],
+                "settled_count": settled_count,
+                "plans_summary": plans_summary,
+            }
+        )
+    return {"items": items}

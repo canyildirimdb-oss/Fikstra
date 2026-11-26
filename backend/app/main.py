@@ -20,11 +20,18 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
 from app.database import ensure_schema, get_db
-from app.models import Coupon, CouponItem, Match, Prediction, PushSubscription, ScraperCache, SiteAnnouncement, SyncLog, TelegramDispatch
+from app.models import Coupon, CouponItem, Match, Prediction, PushSubscription, ScraperCache, SiteAnnouncement, SportotoMatch, SportotoWeek, SyncLog, TelegramDispatch
 from app.routers.api import clear_api_cache, router as api_router
+from app.sportoto_optimizer import (
+    VALID_RESULTS,
+    devig_1x2,
+    match_and_create_sportoto_week,
+    serialize_sportoto_week,
+)
 from app.telegram_bot import (
     check_and_send_health_alerts,
     discover_telegram_topics,
+    dispatch_sportoto_week,
     dispatch_telegram_settlements,
     handle_telegram_webhook,
     send_telegram_test_messages,
@@ -536,6 +543,193 @@ def admin_export_calibration_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="fikstra_kalibrasyon_{today_str}.csv"'},
     )
+
+
+class SportotoParseIn(BaseModel):
+    title: str
+    raw_text: str
+
+
+class SportotoMatchPatchItem(BaseModel):
+    slot_no: int
+    odd_1: Optional[float] = None
+    odd_x: Optional[float] = None
+    odd_2: Optional[float] = None
+    actual_result: Optional[str] = None
+
+
+class SportotoMatchesPatchIn(BaseModel):
+    matches: list[SportotoMatchPatchItem] = []
+    auto_settle_from_db: bool = False
+
+
+@app.get("/api/admin/sportoto/weeks")
+def admin_list_sportoto_weeks(
+    x_cron_secret: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _verify_cron_secret(x_cron_secret)
+    weeks = (
+        db.query(SportotoWeek)
+        .options(joinedload(SportotoWeek.matches))
+        .order_by(SportotoWeek.created_at.desc(), SportotoWeek.id.desc())
+        .limit(15)
+        .all()
+    )
+    return {"items": [serialize_sportoto_week(w, include_plans=True) for w in weeks]}
+
+
+@app.post("/api/admin/sportoto/parse")
+def admin_parse_sportoto_week(
+    payload: SportotoParseIn,
+    x_cron_secret: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _verify_cron_secret(x_cron_secret)
+    try:
+        week = match_and_create_sportoto_week(db, payload.title, payload.raw_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return serialize_sportoto_week(week, include_plans=True)
+
+
+@app.patch("/api/admin/sportoto/weeks/{week_id}/matches")
+def admin_patch_sportoto_matches(
+    week_id: int,
+    payload: SportotoMatchesPatchIn,
+    x_cron_secret: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _verify_cron_secret(x_cron_secret)
+    week = (
+        db.query(SportotoWeek)
+        .options(joinedload(SportotoWeek.matches))
+        .filter(SportotoWeek.id == week_id)
+        .first()
+    )
+    if not week:
+        raise HTTPException(status_code=404, detail="Sportoto week not found")
+
+    by_slot = {m.slot_no: m for m in week.matches}
+
+    if payload.auto_settle_from_db:
+        pred_ids = [m.prediction_id for m in week.matches if m.prediction_id]
+        if pred_ids:
+            preds = (
+                db.query(Prediction)
+                .options(joinedload(Prediction.match))
+                .filter(Prediction.id.in_(pred_ids))
+                .all()
+            )
+            pred_map = {p.id: p for p in preds}
+            for sm in week.matches:
+                if not sm.prediction_id:
+                    continue
+                pr = pred_map.get(sm.prediction_id)
+                mt = pr.match if pr else None
+                if mt and mt.status == "FINISHED" and mt.home_score is not None and mt.away_score is not None:
+                    if mt.home_score > mt.away_score:
+                        sm.actual_result = "1"
+                    elif mt.home_score == mt.away_score:
+                        sm.actual_result = "X"
+                    else:
+                        sm.actual_result = "2"
+
+    for item in payload.matches:
+        sm = by_slot.get(item.slot_no)
+        if not sm:
+            continue
+        if item.odd_1 is not None and item.odd_x is not None and item.odd_2 is not None:
+            try:
+                p1, px, p2 = devig_1x2(item.odd_1, item.odd_x, item.odd_2)
+                sm.odd_1 = float(item.odd_1)
+                sm.odd_x = float(item.odd_x)
+                sm.odd_2 = float(item.odd_2)
+                sm.prob_1 = round(p1, 6)
+                sm.prob_x = round(px, 6)
+                sm.prob_2 = round(p2, 6)
+                sm.source = "market_devig"
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Slot {item.slot_no}: {exc}")
+
+        if item.actual_result is not None:
+            res = item.actual_result.strip().upper()
+            if res == "":
+                sm.actual_result = None
+            elif res in VALID_RESULTS:
+                sm.actual_result = res
+            else:
+                raise HTTPException(status_code=400, detail=f"Slot {item.slot_no}: Geçersiz sonuç '{res}'")
+
+    all_settled = len(week.matches) == 15 and all(m.actual_result in VALID_RESULTS for m in week.matches)
+    if all_settled and week.status == "PUBLISHED":
+        week.status = "SETTLED"
+    elif not all_settled and week.status == "SETTLED":
+        week.status = "PUBLISHED"
+
+    db.commit()
+    db.refresh(week)
+    return serialize_sportoto_week(week, include_plans=True)
+
+
+@app.post("/api/admin/sportoto/weeks/{week_id}/publish")
+def admin_publish_sportoto_week(
+    week_id: int,
+    x_cron_secret: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _verify_cron_secret(x_cron_secret)
+    week = (
+        db.query(SportotoWeek)
+        .options(joinedload(SportotoWeek.matches))
+        .filter(SportotoWeek.id == week_id)
+        .first()
+    )
+    if not week:
+        raise HTTPException(status_code=404, detail="Sportoto week not found")
+    if len(week.matches) != 15:
+        raise HTTPException(status_code=400, detail="Haftada tam 15 maç bulunmalıdır")
+    missing = [m.slot_no for m in sorted(week.matches, key=lambda x: x.slot_no) if m.source == "missing" or m.prob_1 is None]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Eksik verili maçlar var (Slot: {', '.join(map(str, missing))}). Yayınlamak için 1-X-2 oranlarını girin.",
+        )
+
+    week.status = "SETTLED" if all(m.actual_result in VALID_RESULTS for m in week.matches) else "PUBLISHED"
+    if not week.published_at:
+        week.published_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(week)
+    return serialize_sportoto_week(week, include_plans=True)
+
+
+@app.post("/api/admin/sportoto/weeks/{week_id}/telegram")
+def admin_telegram_sportoto_week(
+    week_id: int,
+    x_cron_secret: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _verify_cron_secret(x_cron_secret)
+    res = dispatch_sportoto_week(db, week_id)
+    if not res.get("ok") and res.get("error") in {"week_not_found", "week_not_published", "incomplete_matches"}:
+        raise HTTPException(status_code=400, detail=res.get("error"))
+    return res
+
+
+@app.delete("/api/admin/sportoto/weeks/{week_id}")
+def admin_delete_sportoto_week(
+    week_id: int,
+    x_cron_secret: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _verify_cron_secret(x_cron_secret)
+    week = db.query(SportotoWeek).filter(SportotoWeek.id == week_id).first()
+    if not week:
+        raise HTTPException(status_code=404, detail="Sportoto week not found")
+    db.delete(week)
+    db.commit()
+    return {"ok": True, "deleted_id": week_id}
 
 
 @app.post("/api/telegram/webhook")

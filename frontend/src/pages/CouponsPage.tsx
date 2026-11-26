@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowDownToLine, BookmarkPlus, Layers, Link2, Lock, Share2, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import { api } from "../api/client";
 import { CouponShareModal } from "../components/CouponShareModal";
+import { SportotoView } from "../components/SportotoView";
 import { StakeCalculator } from "../components/StakeCalculator";
 import { TeamBadge } from "../components/TeamBadge";
 import type { CouponData, CustomSlipItem, PredictionStatusItem, SavedSlip } from "../types";
@@ -9,6 +10,8 @@ import type { ShareCouponPayload } from "../utils/couponShare";
 import { formatMarketLabel } from "../utils/format";
 
 interface Props {
+  subTab?: "active" | "history" | "sportoto" | "tracked";
+  onSubTabChange?: (next: "active" | "history" | "sportoto" | "tracked") => void;
   slipItems: CustomSlipItem[];
   stake: number;
   onChangeStake: (next: number) => void;
@@ -51,6 +54,8 @@ const TIER_META: Record<
 };
 
 export function CouponsPage({
+  subTab: controlledSubTab,
+  onSubTabChange,
   slipItems,
   stake,
   onChangeStake,
@@ -64,7 +69,12 @@ export function CouponsPage({
   onDeleteSavedSlip,
   refreshTrigger,
 }: Props) {
-  const [subTab, setSubTab] = useState<"active" | "history" | "tracked">("active");
+  const [localSubTab, setLocalSubTab] = useState<"active" | "history" | "sportoto" | "tracked">("active");
+  const subTab = controlledSubTab ?? localSubTab;
+  const setSubTab = (next: "active" | "history" | "sportoto" | "tracked") => {
+    setLocalSubTab(next);
+    onSubTabChange?.(next);
+  };
   const [trackedStatuses, setTrackedStatuses] = useState<Record<number, PredictionStatusItem>>({});
   const [trackedLoading, setTrackedLoading] = useState(false);
   const [mobileTier, setMobileTier] = useState<"BANKO" | "DENGELI" | "SURPRIZ">("BANKO");
@@ -158,11 +168,11 @@ export function CouponsPage({
 
   return (
     <div className="space-y-5">
-      {/* Güncel Kuponlar | Geçmiş Kuponlar Switch */}
-      <div className="flex items-center gap-2">
+      {/* Güncel Kuponlar | Geçmiş Kuponlar | Spor Toto 15'li | Takip Ettiklerim Switch */}
+      <div className="flex flex-wrap items-center gap-2">
         <button
           onClick={() => setSubTab("active")}
-          className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${
+          className={`px-3.5 py-2 rounded-full text-xs font-bold transition-all ${
             subTab === "active"
               ? "bg-[#00FF85] text-[#05080D] shadow-[0_0_18px_-4px_rgba(0,255,133,0.75)]"
               : "glass-card text-slate-300 hover:text-white"
@@ -172,7 +182,7 @@ export function CouponsPage({
         </button>
         <button
           onClick={() => setSubTab("history")}
-          className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-bold transition-all ${
+          className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-bold transition-all ${
             subTab === "history"
               ? "bg-[#00FF85] text-[#05080D] shadow-[0_0_18px_-4px_rgba(0,255,133,0.75)]"
               : "glass-card text-slate-300 hover:text-white"
@@ -192,8 +202,18 @@ export function CouponsPage({
           )}
         </button>
         <button
+          onClick={() => setSubTab("sportoto")}
+          className={`px-3.5 py-2 rounded-full text-xs font-bold transition-all ${
+            subTab === "sportoto"
+              ? "bg-[#00FF85] text-[#05080D] shadow-[0_0_18px_-4px_rgba(0,255,133,0.75)]"
+              : "glass-card text-slate-300 hover:text-white"
+          }`}
+        >
+          Spor Toto 15&apos;li
+        </button>
+        <button
           onClick={() => setSubTab("tracked")}
-          className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-bold transition-all ${
+          className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-bold transition-all ${
             subTab === "tracked"
               ? "bg-[#00FF85] text-[#05080D] shadow-[0_0_18px_-4px_rgba(0,255,133,0.75)]"
               : "glass-card text-slate-300 hover:text-white"
@@ -213,6 +233,9 @@ export function CouponsPage({
           )}
         </button>
       </div>
+
+      {/* Spor Toto 15'li View */}
+      {subTab === "sportoto" && <SportotoView refreshTrigger={refreshTrigger} />}
 
       {/* Tracked User Slips (localStorage + live DB status) */}
       {subTab === "tracked" && (

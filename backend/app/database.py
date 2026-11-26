@@ -126,6 +126,8 @@ def ensure_schema():
         "CREATE INDEX IF NOT EXISTS ix_site_announcements_active ON site_announcements (is_active, created_at)",
         "CREATE INDEX IF NOT EXISTS ix_match_pulse_votes_pred ON match_pulse_votes (prediction_id)",
         "CREATE INDEX IF NOT EXISTS ix_match_slip_adds_pred ON match_slip_adds (prediction_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sportoto_weeks_status_created ON sportoto_weeks (status, created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_sportoto_matches_week_slot ON sportoto_matches (week_id, slot_no)",
     ]
     with engine.begin() as conn:
         for stmt in index_stmts:

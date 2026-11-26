@@ -291,3 +291,45 @@ class MatchSlipAdd(Base):
     prediction_id: Mapped[int] = mapped_column(ForeignKey("predictions.id", ondelete="CASCADE"), index=True)
     client_hash: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class SportotoWeek(Base):
+    __tablename__ = "sportoto_weeks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(24), default="DRAFT", index=True)  # DRAFT | PUBLISHED | SETTLED
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    matches: Mapped[list["SportotoMatch"]] = relationship(
+        back_populates="week",
+        cascade="all, delete-orphan",
+        order_by="SportotoMatch.slot_no",
+    )
+
+
+class SportotoMatch(Base):
+    __tablename__ = "sportoto_matches"
+    __table_args__ = (
+        UniqueConstraint("week_id", "slot_no", name="uq_sportoto_week_slot"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    week_id: Mapped[int] = mapped_column(ForeignKey("sportoto_weeks.id", ondelete="CASCADE"), index=True)
+    slot_no: Mapped[int] = mapped_column(Integer)
+    home_team: Mapped[str] = mapped_column(String(128))
+    away_team: Mapped[str] = mapped_column(String(128))
+    prediction_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("predictions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    source: Mapped[str] = mapped_column(String(24), default="missing")  # fikstra_model | market_devig | missing
+    odd_1: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    odd_x: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    odd_2: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    prob_1: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    prob_x: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    prob_2: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    actual_result: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)  # 1 | X | 2 | None
+
+    week: Mapped["SportotoWeek"] = relationship(back_populates="matches")
