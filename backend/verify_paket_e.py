@@ -393,6 +393,147 @@ def test_perf_transparency():
     print("TEST_PERF_TRANSPARENCY: PASS")
 
 
+def test_recent_matches_accuracy():
+    from datetime import timedelta
+    from scrapers.external_data import _fetch_team_schedule_profile, _parse_espn_form
+
+    now = datetime.now(timezone.utc)
+    kickoff = now - timedelta(hours=1)
+    team_id = "100"
+
+    # Mock ESPN lastFiveGames with:
+    # - future/current match (should be excluded!)
+    # - duplicate event id (should be deduplicated!)
+    # - away win (team_id=100 is away, score 1-3 -> W)
+    # - home loss (team_id=100 is home, score 0-2 -> L)
+    # - away draw (team_id=100 is away, score 2-2 -> D)
+    block = {
+        "team": {"id": team_id, "displayName": "Galatasaray"},
+        "events": [
+            {
+                "id": "curr_match",
+                "gameDate": kickoff.isoformat(),
+                "homeTeamId": team_id,
+                "homeTeamScore": "3",
+                "awayTeamScore": "1",
+                "opponent": {"displayName": "Current Opp"},
+            },
+            {
+                "id": "ev_future",
+                "gameDate": (now + timedelta(days=2)).isoformat(),
+                "homeTeamId": team_id,
+                "homeTeamScore": None,
+                "awayTeamScore": None,
+                "opponent": {"displayName": "Future Opp"},
+            },
+            {
+                "id": "ev_3",
+                "gameDate": (kickoff - timedelta(days=3)).isoformat(),
+                "homeTeamId": "200",
+                "homeTeamScore": "1",
+                "awayTeamScore": "3",
+                "opponent": {"displayName": "AwayWinOpp"},
+            },
+            {
+                "id": "ev_3",  # duplicate!
+                "gameDate": (kickoff - timedelta(days=3)).isoformat(),
+                "homeTeamId": "200",
+                "homeTeamScore": "1",
+                "awayTeamScore": "3",
+                "opponent": {"displayName": "AwayWinOpp"},
+            },
+            {
+                "id": "ev_2",
+                "gameDate": (kickoff - timedelta(days=7)).isoformat(),
+                "homeTeamId": team_id,
+                "homeTeamScore": "0",
+                "awayTeamScore": "2",
+                "opponent": {"displayName": "HomeLossOpp"},
+            },
+            {
+                "id": "ev_1",
+                "gameDate": (kickoff - timedelta(days=12)).isoformat(),
+                "homeTeamId": "300",
+                "homeTeamScore": "2",
+                "awayTeamScore": "2",
+                "opponent": {"displayName": "AwayDrawOpp"},
+            },
+        ],
+    }
+
+    parsed = _parse_espn_form(block, match_start_utc=kickoff, exclude_event_id="curr_match")
+    assert parsed["form"] == ["W", "L", "D"], f"Unexpected form: {parsed['form']}"
+    rm = parsed["recent_matches"]
+    assert len(rm) == 3, f"Expected 3 deduplicated past matches, got {len(rm)}"
+    assert [m["result"] for m in rm] == parsed["form"], "Form dots & recent matches order mismatch!"
+    assert rm[0]["opponent"] == "AwayWinOpp" and rm[0]["is_home"] is False and rm[0]["away_score"] == 3
+    assert rm[1]["opponent"] == "HomeLossOpp" and rm[1]["is_home"] is True and rm[1]["home_score"] == 0
+    assert rm[2]["opponent"] == "AwayDrawOpp" and rm[2]["home_score"] == 2 and rm[2]["away_score"] == 2
+
+    # Also test _fetch_team_schedule_profile with mocked ESPN schedule response
+    schedule_payload = {
+        "events": [
+            {
+                "id": "curr_match",
+                "date": kickoff.isoformat(),
+                "competitions": [{
+                    "status": {"type": {"completed": True}},
+                    "competitors": [
+                        {"team": {"id": team_id, "displayName": "Galatasaray"}, "homeAway": "home", "score": {"value": 3}},
+                        {"team": {"id": "999", "displayName": "Current Opp"}, "homeAway": "away", "score": {"value": 1}},
+                    ],
+                }],
+            },
+            {
+                "id": "sched_unplayed",
+                "date": (kickoff - timedelta(days=1)).isoformat(),
+                "competitions": [{
+                    "status": {"type": {"completed": False}},
+                    "competitors": [
+                        {"team": {"id": team_id, "displayName": "Galatasaray"}, "homeAway": "home", "score": {"value": 0}},
+                        {"team": {"id": "888", "displayName": "Postponed Opp"}, "homeAway": "away", "score": {"value": 0}},
+                    ],
+                }],
+            },
+            {
+                "id": "sched_1",
+                "date": (kickoff - timedelta(days=4)).isoformat(),
+                "competitions": [{
+                    "status": {"type": {"completed": True}},
+                    "competitors": [
+                        {"team": {"id": "777", "displayName": "Rival A"}, "homeAway": "home", "score": {"value": 0}},
+                        {"team": {"id": team_id, "displayName": "Galatasaray"}, "homeAway": "away", "score": {"value": 2}},
+                    ],
+                }],
+            },
+            {
+                "id": "sched_2",
+                "date": (kickoff - timedelta(days=9)).isoformat(),
+                "competitions": [{
+                    "status": {"type": {"completed": True}},
+                    "competitors": [
+                        {"team": {"id": team_id, "displayName": "Galatasaray"}, "homeAway": "home", "score": {"value": 1}},
+                        {"team": {"id": "666", "displayName": "Rival B"}, "homeAway": "away", "score": {"value": 3}},
+                    ],
+                }],
+            },
+        ]
+    }
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.json.return_value = schedule_payload
+    fake_client = MagicMock()
+    fake_client.get.return_value = fake_resp
+
+    prof = _fetch_team_schedule_profile(fake_client, team_id, kickoff, exclude_event_id="curr_match")
+    assert prof["form_10"] == ["W", "L"], f"Unexpected schedule form: {prof['form_10']}"
+    assert [m["result"] for m in prof["recent_matches"]] == prof["form_10"]
+    assert prof["recent_matches"][0]["opponent"] == "Rival A" and prof["recent_matches"][0]["is_home"] is False
+    assert prof["recent_matches"][1]["opponent"] == "Rival B" and prof["recent_matches"][1]["is_home"] is True
+
+    print("TEST_RECENT_MATCHES_ACCURACY: PASS")
+
+
 if __name__ == "__main__":
     p1, px, p2 = devig_1x2(2.0, 3.5, 3.8)
     assert abs((p1 + px + p2) - 1.0) < 1e-9
@@ -401,4 +542,5 @@ if __name__ == "__main__":
     test_pe3_live_survival_and_telegram_idempotent()
     test_pe4_human_readable_notifications()
     test_perf_transparency()
+    test_recent_matches_accuracy()
     print("ALL PAKET E TESTS PASSED")

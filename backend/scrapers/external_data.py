@@ -12,6 +12,8 @@ from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests
 from rapidfuzz import fuzz
 
+from utils.time_utils import to_tr_datetime
+
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 ESPN_LEAGUES = [
     "all",
@@ -248,10 +250,11 @@ def _fetch_team_schedule_profile(
     team_id: str,
     match_start_utc: Optional[datetime],
     prefer_home: Optional[bool] = None,
+    exclude_event_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Fetch last 10 completed official matches across all competitions from ESPN team schedule.
-    Returns last_dt, 10-match weighted averages, goal std dev, venue splits, and recent match refs.
+    Returns last_dt, 10-match weighted averages, goal std dev, venue splits, recent_refs, and recent_matches.
     """
     empty: dict[str, Any] = {
         "last_dt": None,
@@ -266,14 +269,18 @@ def _fetch_team_schedule_profile(
         "away_gf_10": None,
         "away_ga_10": None,
         "recent_refs": [],
+        "recent_matches": [],
     }
     if not team_id:
         return empty
+    now_utc = datetime.now(timezone.utc)
     ref_utc = (
         match_start_utc.replace(tzinfo=timezone.utc)
         if (match_start_utc and match_start_utc.tzinfo is None)
-        else (match_start_utc or datetime.now(timezone.utc))
+        else (match_start_utc or now_utc)
     )
+    if ref_utc > now_utc:
+        ref_utc = now_utc
     try:
         r = client.get(f"{ESPN_BASE}/all/teams/{team_id}/schedule")
         if r.status_code != 200:
@@ -283,7 +290,14 @@ def _fetch_team_schedule_profile(
         return empty
 
     completed: list[tuple[datetime, dict[str, Any]]] = []
+    seen_eids: set[str] = set()
+    excl = str(exclude_event_id or "").strip()
     for ev in events:
+        eid = str(ev.get("id") or "").strip()
+        if excl and eid == excl:
+            continue
+        if eid and eid in seen_eids:
+            continue
         comp = (ev.get("competitions") or [{}])[0]
         if not comp.get("status", {}).get("type", {}).get("completed"):
             continue
@@ -292,7 +306,11 @@ def _fetch_team_schedule_profile(
             dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError:
             continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
         if dt < ref_utc:
+            if eid:
+                seen_eids.add(eid)
             completed.append((dt, ev))
 
     if not completed:
@@ -315,6 +333,7 @@ def _fetch_team_schedule_profile(
     away_gas: list[int] = []
     form_10: list[str] = []
     recent_refs: list[dict[str, str]] = []
+    recent_matches: list[dict[str, Any]] = []
 
     for idx, (dt, ev) in enumerate(completed[:10]):
         comp = (ev.get("competitions") or [{}])[0]
@@ -350,13 +369,28 @@ def _fetch_team_schedule_profile(
             away_gfs.append(gf)
             away_gas.append(ga)
 
-        form_10.append("W" if gf > ga else ("D" if gf == ga else "L"))
+        res = "W" if gf > ga else ("D" if gf == ga else "L")
+        form_10.append(res)
 
-        if len(recent_refs) < 5:
-            eid = str(ev.get("id") or "")
+        eid = str(ev.get("id") or "")
+        if len(recent_refs) < 5 and eid:
             lslug = str((ev.get("league") or {}).get("slug") or "all")
-            if eid:
-                recent_refs.append({"event_id": eid, "league_slug": lslug})
+            recent_refs.append({"event_id": eid, "league_slug": lslug})
+
+        if len(recent_matches) < 5:
+            my_name = (my_comp.get("team") or {}).get("displayName") or (my_comp.get("team") or {}).get("shortDisplayName") or ""
+            opp_name = (opp_comp.get("team") or {}).get("displayName") or (opp_comp.get("team") or {}).get("shortDisplayName") or ""
+            recent_matches.append({
+                "event_id": eid,
+                "date_tr": to_tr_datetime(dt).strftime("%d.%m"),
+                "home_team": my_name if is_home else opp_name,
+                "away_team": opp_name if is_home else my_name,
+                "opponent": opp_name,
+                "is_home": is_home,
+                "home_score": gf if is_home else ga,
+                "away_score": ga if is_home else gf,
+                "result": res,
+            })
 
     if w_total > 0 and venue_w_total >= 1.2:
         goals_avg_10 = round(((gf_w_sum / w_total) * 0.65) + ((venue_gf_sum / venue_w_total) * 0.35), 2)
@@ -387,6 +421,7 @@ def _fetch_team_schedule_profile(
         "away_gf_10": round(sum(away_gfs) / len(away_gfs), 3) if away_gfs else None,
         "away_ga_10": round(sum(away_gas) / len(away_gas), 3) if away_gas else None,
         "recent_refs": recent_refs,
+        "recent_matches": recent_matches,
     }
 
 
@@ -483,25 +518,51 @@ def _parse_espn_form(
     match_start_utc: Optional[datetime] = None,
     prefer_home: Optional[bool] = None,
     schedule_last_dt: Optional[datetime] = None,
+    exclude_event_id: Optional[str] = None,
 ) -> dict[str, Any]:
     team_id = str(team_block.get("team", {}).get("id", ""))
+    team_name = str(team_block.get("team", {}).get("displayName") or team_block.get("team", {}).get("shortDisplayName") or "")
     events = team_block.get("events") or []
 
     # Sort events most recent first by gameDate if available
     def _ev_dt(ev: dict[str, Any]) -> datetime:
         raw = ev.get("gameDate") or ""
         try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
         except ValueError:
             return datetime.min.replace(tzinfo=timezone.utc)
 
-    sorted_events = sorted(events, key=_ev_dt, reverse=True)
+    now_utc = datetime.now(timezone.utc)
+    ref_utc = (
+        match_start_utc.replace(tzinfo=timezone.utc)
+        if (match_start_utc and match_start_utc.tzinfo is None)
+        else (match_start_utc or now_utc)
+    )
+    if ref_utc > now_utc:
+        ref_utc = now_utc
+
+    excl = str(exclude_event_id or "").strip()
+    seen_eids: set[str] = set()
+    filtered_events: list[dict[str, Any]] = []
+    for ev in sorted(events, key=_ev_dt, reverse=True):
+        eid = str(ev.get("id") or "").strip()
+        if excl and eid == excl:
+            continue
+        if eid and eid in seen_eids:
+            continue
+        g_dt = _ev_dt(ev)
+        if g_dt <= datetime.min.replace(tzinfo=timezone.utc) or g_dt >= ref_utc:
+            continue
+        if eid:
+            seen_eids.add(eid)
+        filtered_events.append(ev)
 
     rest_days: Optional[int] = None
     if match_start_utc is not None:
         m_utc = match_start_utc.replace(tzinfo=timezone.utc) if match_start_utc.tzinfo is None else match_start_utc
         last_dt: Optional[datetime] = schedule_last_dt if (schedule_last_dt and schedule_last_dt < m_utc) else None
-        for g in sorted_events:
+        for g in filtered_events:
             g_dt = _ev_dt(g)
             if g_dt > datetime.min.replace(tzinfo=timezone.utc) and g_dt < m_utc:
                 if last_dt is None or g_dt > last_dt:
@@ -514,6 +575,7 @@ def _parse_espn_form(
                 rest_days = days
 
     form_list: list[str] = []
+    recent_matches: list[dict[str, Any]] = []
     gf_w_sum = 0.0
     ga_w_sum = 0.0
     w_total = 0.0
@@ -522,7 +584,7 @@ def _parse_espn_form(
     venue_ga_sum = 0.0
     venue_w_total = 0.0
 
-    for idx, g in enumerate(sorted_events[:5]):
+    for idx, g in enumerate(filtered_events[:5]):
         try:
             hs = int(g.get("homeTeamScore"))
             as_ = int(g.get("awayTeamScore"))
@@ -542,12 +604,20 @@ def _parse_espn_form(
             venue_ga_sum += ga * w
             venue_w_total += w
 
-        if gf > ga:
-            form_list.append("W")
-        elif gf == ga:
-            form_list.append("D")
-        else:
-            form_list.append("L")
+        res = "W" if gf > ga else ("D" if gf == ga else "L")
+        form_list.append(res)
+        opp_name = ((g.get("opponent") or {}).get("displayName") or (g.get("opponent") or {}).get("shortDisplayName") or "")
+        recent_matches.append({
+            "event_id": str(g.get("id") or ""),
+            "date_tr": to_tr_datetime(_ev_dt(g)).strftime("%d.%m"),
+            "home_team": team_name if is_home else opp_name,
+            "away_team": opp_name if is_home else team_name,
+            "opponent": opp_name,
+            "is_home": is_home,
+            "home_score": hs,
+            "away_score": as_,
+            "result": res,
+        })
 
     if w_total > 0 and venue_w_total >= 1.2:
         goals_avg = round(((gf_w_sum / w_total) * 0.60) + ((venue_gf_sum / venue_w_total) * 0.40), 2)
@@ -561,6 +631,7 @@ def _parse_espn_form(
 
     return {
         "form": form_list,
+        "recent_matches": recent_matches,
         "goals_avg": goals_avg,
         "conceded_avg": conceded_avg,
         "rest_days": rest_days,
@@ -641,17 +712,26 @@ def fetch_espn_match_details(
         out["away_goal_std"] = None
         out["home_recent_refs"] = []
         out["away_recent_refs"] = []
+        out["home_recent_matches"] = []
+        out["away_recent_matches"] = []
         out["home_sched_venue"] = {}
         out["away_sched_venue"] = {}
 
         for block in data.get("lastFiveGames") or []:
             tid = str(block.get("team", {}).get("id", ""))
             if tid == home_espn_id:
-                prof = _fetch_team_schedule_profile(client, tid, match_start_utc, prefer_home=True)
+                prof = _fetch_team_schedule_profile(
+                    client, tid, match_start_utc, prefer_home=True, exclude_event_id=espn_id
+                )
                 parsed = _parse_espn_form(
-                    block, match_start_utc=match_start_utc, prefer_home=True, schedule_last_dt=prof["last_dt"]
+                    block,
+                    match_start_utc=match_start_utc,
+                    prefer_home=True,
+                    schedule_last_dt=prof["last_dt"],
+                    exclude_event_id=espn_id,
                 )
                 out["home_form"] = prof["form_10"][:5] if prof["form_10"] else parsed["form"]
+                out["home_recent_matches"] = prof["recent_matches"][:5] if prof["form_10"] else parsed["recent_matches"]
                 out["home_goals_avg"] = prof["goals_avg_10"] if prof["goals_avg_10"] is not None else parsed["goals_avg"]
                 out["home_conceded_avg"] = prof["conceded_avg_10"] if prof["conceded_avg_10"] is not None else parsed["conceded_avg"]
                 out["home_rest_days"] = parsed["rest_days"]
@@ -663,11 +743,18 @@ def fetch_espn_match_details(
                     "home_ga": prof["home_ga_10"],
                 }
             elif tid == away_espn_id:
-                prof = _fetch_team_schedule_profile(client, tid, match_start_utc, prefer_home=False)
+                prof = _fetch_team_schedule_profile(
+                    client, tid, match_start_utc, prefer_home=False, exclude_event_id=espn_id
+                )
                 parsed = _parse_espn_form(
-                    block, match_start_utc=match_start_utc, prefer_home=False, schedule_last_dt=prof["last_dt"]
+                    block,
+                    match_start_utc=match_start_utc,
+                    prefer_home=False,
+                    schedule_last_dt=prof["last_dt"],
+                    exclude_event_id=espn_id,
                 )
                 out["away_form"] = prof["form_10"][:5] if prof["form_10"] else parsed["form"]
+                out["away_recent_matches"] = prof["recent_matches"][:5] if prof["form_10"] else parsed["recent_matches"]
                 out["away_goals_avg"] = prof["goals_avg_10"] if prof["goals_avg_10"] is not None else parsed["goals_avg"]
                 out["away_conceded_avg"] = prof["conceded_avg_10"] if prof["conceded_avg_10"] is not None else parsed["conceded_avg"]
                 out["away_rest_days"] = parsed["rest_days"]

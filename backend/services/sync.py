@@ -365,6 +365,16 @@ def run_sync_pipeline(
                 ctx.away_rest_days = details.get("away_rest_days")
                 ctx.injuries_json = json.dumps(injuries_payload, ensure_ascii=False)
                 ctx.context_updated_at = now
+                if details.get("home_recent_matches") or details.get("away_recent_matches"):
+                    from utils.cache import set_cached_json
+                    set_cached_json(
+                        db,
+                        f"recent_matches:{match.id}",
+                        {
+                            "home": details.get("home_recent_matches") or [],
+                            "away": details.get("away_recent_matches") or [],
+                        },
+                    )
 
                 # ESPN Standings & Seasonal Home/Away Stats (6h DB cached)
                 if league_slug:

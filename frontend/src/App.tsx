@@ -23,6 +23,7 @@ import { formatMarketLabel } from "./utils/format";
 import { ControlPanel } from "./components/ControlPanel";
 import { CouponShareModal } from "./components/CouponShareModal";
 import { MatchDetailDrawer } from "./components/MatchDetailDrawer";
+import { SettledMatchDrawer } from "./components/SettledMatchDrawer";
 import { NotificationCenter } from "./components/NotificationCenter";
 import { StakeCalculator } from "./components/StakeCalculator";
 import type { ShareCouponPayload } from "./utils/couponShare";
@@ -30,7 +31,7 @@ import { CouponsPage } from "./pages/CouponsPage";
 import { FikstraTotoPage } from "./pages/FikstraTotoPage";
 import { HighlightsPage } from "./pages/HighlightsPage";
 import { PerformancePage } from "./pages/PerformancePage";
-import type { CustomSlipItem, DashboardSummary, SavedSlip } from "./types";
+import type { CustomSlipItem, DashboardSummary, MatchDetail, SavedSlip } from "./types";
 
 type TabKey = "highlights" | "coupons" | "toto" | "performance";
 
@@ -121,6 +122,8 @@ export function App() {
   const [selectedMatch, setSelectedMatch] = useState<{
     matchId: number;
     couponPick?: { market_key: string; selection_key: string; iddaa_odd: number };
+    isSettled?: boolean;
+    initialDetail?: MatchDetail | null;
   } | null>(() =>
     initialUrlRef.current.matchId ? { matchId: initialUrlRef.current.matchId } : null
   );
@@ -362,6 +365,11 @@ export function App() {
 
   const handleToggleSlip = useCallback(
     (item: CustomSlipItem) => {
+      const kickoffMs = item.start_time_utc ? Date.parse(item.start_time_utc) : NaN;
+      if (!Number.isNaN(kickoffMs) && kickoffMs <= Date.now()) {
+        showToast("Başlamış veya sonuçlanmış maç kupona eklenemez");
+        return;
+      }
       setSlipItems((prev) => {
         const exists = prev.some((x) => x.match_id === item.match_id);
         if (exists) {
@@ -739,7 +747,7 @@ export function App() {
         {tab === "performance" && (
           <PerformancePage
             refreshTrigger={refreshTrigger}
-            onSelectMatch={(matchId) => setSelectedMatch({ matchId })}
+            onSelectMatch={(matchId) => setSelectedMatch({ matchId, isSettled: true })}
           />
         )}
 
@@ -1054,13 +1062,21 @@ export function App() {
         }}
       />
 
-      {/* Match Detail Bottom Sheet / Modal */}
+      {/* Match Detail Bottom Sheet / Modal (Pre-match vs Settled) */}
       <MatchDetailDrawer
-        matchId={selectedMatch?.matchId ?? null}
+        matchId={!selectedMatch?.isSettled ? (selectedMatch?.matchId ?? null) : null}
         couponPick={selectedMatch?.couponPick}
         onClose={handleCloseMatch}
+        onSettledDetected={(d) =>
+          setSelectedMatch({ matchId: d.match_id, isSettled: true, initialDetail: d })
+        }
         slipItems={slipItems}
         onToggleSlip={handleToggleSlip}
+      />
+      <SettledMatchDrawer
+        matchId={selectedMatch?.isSettled ? selectedMatch.matchId : null}
+        initialDetail={selectedMatch?.initialDetail}
+        onClose={handleCloseMatch}
       />
       <CouponShareModal payload={slipSharePayload} onClose={() => setSlipSharePayload(null)} />
 

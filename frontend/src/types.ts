@@ -97,6 +97,18 @@ export interface InjuryEntry {
   squad_value_share_pct?: number | null;
 }
 
+export interface RecentMatchItem {
+  event_id: string;
+  date_tr: string;
+  home_team: string;
+  away_team: string;
+  opponent: string;
+  is_home: boolean;
+  home_score: number;
+  away_score: number;
+  result: "W" | "D" | "L";
+}
+
 export interface MatchDetail {
   match_id: number;
   iddaa_id: string;
@@ -117,6 +129,8 @@ export interface MatchDetail {
   context: {
     home_form: string[];
     away_form: string[];
+    home_recent_matches?: RecentMatchItem[];
+    away_recent_matches?: RecentMatchItem[];
     home_goals_avg: number | null;
     away_goals_avg: number | null;
     home_conceded_avg: number | null;
@@ -152,6 +166,11 @@ export interface MatchDetail {
     confidence_score: number;
     value_edge_pct: number | null;
     odds_drop_pct: number | null;
+    status?: "PENDING" | "WON" | "LOST" | "VOID" | string;
+    published_odd?: number | null;
+    published_confidence?: number | null;
+    closing_odd?: number | null;
+    clv_pct?: number | null;
     breakdown: ScoreBreakdown;
   } | null;
   odds: {

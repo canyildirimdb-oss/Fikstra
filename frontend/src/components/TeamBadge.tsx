@@ -81,7 +81,11 @@ export function FormStrip({
       L: "bg-rose-500",
     };
     return (
-      <div className="inline-flex items-center gap-1 shrink-0" aria-label="Son 5 maç formu">
+      <div
+        className="inline-flex items-center gap-1 shrink-0"
+        aria-label="Son 5 maç formu (soldan sağa en yeni)"
+        title="Soldan sağa: en yeni → en eski"
+      >
         {form.slice(0, 5).map((item, idx) => (
           <span
             key={idx}
@@ -98,7 +102,11 @@ export function FormStrip({
     L: { label: "M", cls: "bg-rose-500/20 text-rose-400 border-rose-500/30" },
   };
   return (
-    <div className="inline-flex items-center gap-0.5">
+    <div
+      className="inline-flex items-center gap-0.5"
+      aria-label="Son 5 maç formu (soldan sağa en yeni)"
+      title="Soldan sağa: en yeni → en eski"
+    >
       {form.slice(0, 5).map((item, idx) => {
         const cfg = map[item] || { label: item, cls: "bg-slate-800 text-slate-400 border-slate-700" };
         return (

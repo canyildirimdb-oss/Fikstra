@@ -89,6 +89,7 @@ interface Props {
   matchId: number | null;
   couponPick?: CouponPickContext;
   onClose: () => void;
+  onSettledDetected?: (detail: MatchDetail) => void;
   slipItems?: CustomSlipItem[];
   onToggleSlip?: (item: CustomSlipItem) => void;
 }
@@ -97,6 +98,7 @@ export function MatchDetailDrawer({
   matchId,
   couponPick,
   onClose,
+  onSettledDetected,
   slipItems = [],
   onToggleSlip,
 }: Props) {
@@ -169,6 +171,14 @@ export function MatchDetailDrawer({
       .getMatchDetail(matchId, couponPick?.market_key, couponPick?.selection_key)
       .then((d) => {
         if (cancelled) return;
+        const predStatus = (d.top_prediction?.status || "").toUpperCase();
+        if (
+          onSettledDetected &&
+          (d.status === "FINISHED" || predStatus === "WON" || predStatus === "LOST" || predStatus === "VOID")
+        ) {
+          onSettledDetected(d);
+          return;
+        }
         setDetail(d);
         if (d.top_prediction?.prediction_id) {
           api.getPulse(d.top_prediction.prediction_id).then((p) => {
@@ -668,6 +678,7 @@ export function MatchDetailDrawer({
                           gf: detail.context.home_goals_avg,
                           ga: detail.context.home_conceded_avg,
                           form: detail.context.home_form,
+                          recentMatches: detail.context.home_recent_matches || [],
                         },
                         {
                           team: detail.away_team,
@@ -675,6 +686,7 @@ export function MatchDetailDrawer({
                           gf: detail.context.away_goals_avg,
                           ga: detail.context.away_conceded_avg,
                           form: detail.context.away_form,
+                          recentMatches: detail.context.away_recent_matches || [],
                         },
                       ].map((side) => (
                         <div
@@ -698,6 +710,41 @@ export function MatchDetailDrawer({
                               Yenilen: <strong className="text-rose-400">{side.ga ?? "—"}</strong>
                             </span>
                           </div>
+                          {side.recentMatches.length > 0 ? (
+                            <div className="pt-1.5 border-t border-[#1F2937]/60 space-y-1">
+                              {side.recentMatches.slice(0, 5).map((rm, rIdx) => {
+                                const resBadge =
+                                  rm.result === "W"
+                                    ? { lbl: "G", cls: "bg-emerald-500/20 text-emerald-400" }
+                                    : rm.result === "D"
+                                    ? { lbl: "B", cls: "bg-amber-500/20 text-amber-400" }
+                                    : { lbl: "M", cls: "bg-rose-500/20 text-rose-400" };
+                                return (
+                                  <div
+                                    key={`${rm.event_id}-${rIdx}`}
+                                    className="flex items-center justify-between gap-1.5 text-[10px]"
+                                  >
+                                    <span className="text-slate-500 mono-nums shrink-0">{rm.date_tr}</span>
+                                    <span className="text-slate-300 truncate flex-1">
+                                      {rm.is_home ? "Ev" : "Dep"} · {rm.opponent}
+                                    </span>
+                                    <span className="text-slate-200 font-bold mono-nums shrink-0">
+                                      {rm.home_score}-{rm.away_score}
+                                    </span>
+                                    <span
+                                      className={`w-4 h-4 rounded-[4px] font-bold flex items-center justify-center shrink-0 ${resBadge.cls}`}
+                                    >
+                                      {resBadge.lbl}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <p className="text-[10px] text-slate-500 pt-1 border-t border-[#1F2937]/60">
+                              Son maç detayı sınırlı
+                            </p>
+                          )}
                         </div>
                       ))}
                     </div>
