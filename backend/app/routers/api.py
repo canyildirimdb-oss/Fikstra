@@ -136,56 +136,49 @@ def _serialize_ctx(ctx: Optional[MatchContext], expected_pick: Optional[str] = N
 
 
 def _build_match_detail_ctx(db: Session, m: Match, top_pred: Optional[Prediction]) -> dict:
-    from scrapers.external_data import fetch_espn_match_details
+    from scrapers.external_data import fetch_global_team_recent_matches
     from utils.cache import get_cached_json, set_cached_json
 
     ctx_out = _serialize_ctx(
         m.context,
         expected_pick=f"{top_pred.market_key}:{top_pred.selection_key}" if top_pred else None,
     )
-    cache_key = f"recent_matches:{m.id}"
+    cache_key = f"recent_v4:{m.id}"
     cached_rm = get_cached_json(db, cache_key, ttl_hours=6.0)
-    if cached_rm is None and m.external_match_id:
+    if cached_rm is None:
         cached_rm = {"home": [], "away": []}
         try:
-            import httpx
-            from scrapers.external_data import ESPN_BASE
-            with httpx.Client(timeout=6.0, headers={"User-Agent": "Mozilla/5.0"}) as client:
-                r = client.get(f"{ESPN_BASE}/all/summary?event={m.external_match_id}")
-                if r.status_code == 200:
-                    comp = ((r.json().get("header") or {}).get("competitions") or [{}])[0]
-                    comps = comp.get("competitors") or []
-                    h_id = next((str(c.get("id") or "") for c in comps if c.get("homeAway") == "home"), "")
-                    a_id = next((str(c.get("id") or "") for c in comps if c.get("homeAway") == "away"), "")
-                    if h_id or a_id:
-                        details = fetch_espn_match_details(
-                            m.external_match_id,
-                            home_espn_id=h_id,
-                            away_espn_id=a_id,
-                            match_start_utc=m.start_time_utc,
-                        )
-                        cached_rm = {
-                            "home": details.get("home_recent_matches") or [],
-                            "away": details.get("away_recent_matches") or [],
-                        }
-                        if m.context:
-                            changed = False
-                            if details.get("home_form"):
-                                hf_json = json.dumps(details["home_form"])
-                                if m.context.home_form != hf_json:
-                                    m.context.home_form = hf_json
-                                    ctx_out["home_form"] = details["home_form"]
-                                    changed = True
-                            if details.get("away_form"):
-                                af_json = json.dumps(details["away_form"])
-                                if m.context.away_form != af_json:
-                                    m.context.away_form = af_json
-                                    ctx_out["away_form"] = details["away_form"]
-                                    changed = True
-                            if changed:
-                                db.commit()
-                        set_cached_json(db, cache_key, cached_rm)
-                        db.commit()
+            h_prof = fetch_global_team_recent_matches(
+                m.home_team, match_start_utc=m.start_time_utc, prefer_home=True, db=db, timeout=5.5
+            )
+            a_prof = fetch_global_team_recent_matches(
+                m.away_team, match_start_utc=m.start_time_utc, prefer_home=False, db=db, timeout=5.5
+            )
+            cached_rm = {
+                "home": h_prof.get("recent_matches") or [],
+                "away": a_prof.get("recent_matches") or [],
+                "home_source": h_prof.get("source"),
+                "away_source": a_prof.get("source"),
+            }
+            if m.context:
+                changed = False
+                if h_prof.get("form"):
+                    hf_json = json.dumps(h_prof["form"])
+                    if m.context.home_form != hf_json:
+                        m.context.home_form = hf_json
+                        ctx_out["home_form"] = h_prof["form"]
+                        changed = True
+                if a_prof.get("form"):
+                    af_json = json.dumps(a_prof["form"])
+                    if m.context.away_form != af_json:
+                        m.context.away_form = af_json
+                        ctx_out["away_form"] = a_prof["form"]
+                        changed = True
+                if changed:
+                    db.commit()
+            if cached_rm["home"] or cached_rm["away"]:
+                set_cached_json(db, cache_key, cached_rm)
+                db.commit()
         except Exception:
             pass
 

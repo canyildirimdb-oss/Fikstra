@@ -100,6 +100,7 @@ export interface InjuryEntry {
 export interface RecentMatchItem {
   event_id: string;
   date_tr: string;
+  competition?: string;
   home_team: string;
   away_team: string;
   opponent: string;

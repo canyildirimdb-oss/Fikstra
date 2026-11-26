@@ -16,6 +16,7 @@ from scrapers.external_data import (
     fetch_espn_match_details,
     fetch_espn_team_season_stats,
     fetch_espn_team_shot_xg,
+    fetch_global_team_recent_matches,
     fetch_transfermarkt_injuries,
     get_target_espn_dates,
 )
@@ -355,24 +356,49 @@ def run_sync_pipeline(
                         injuries_payload["away"] = a_inj
                         tm_fresh_count += 1
 
-                ctx.home_form = json.dumps(details["home_form"]) if details["home_form"] is not None else None
-                ctx.away_form = json.dumps(details["away_form"]) if details["away_form"] is not None else None
-                ctx.home_goals_avg = details["home_goals_avg"]
-                ctx.away_goals_avg = details["away_goals_avg"]
-                ctx.home_conceded_avg = details["home_conceded_avg"]
-                ctx.away_conceded_avg = details["away_conceded_avg"]
-                ctx.home_rest_days = details.get("home_rest_days")
-                ctx.away_rest_days = details.get("away_rest_days")
+                # Global Multi-Source Form & Recent Matches (v4: 365Scores -> FotMob -> ESPN w/ cup-only guard)
+                h_global = fetch_global_team_recent_matches(
+                    match.home_team,
+                    match_start_utc=match.start_time_utc,
+                    prefer_home=True,
+                    team_espn_id=ext.get("home_espn_id"),
+                    exclude_event_id=ext.get("espn_id"),
+                    db=db,
+                )
+                a_global = fetch_global_team_recent_matches(
+                    match.away_team,
+                    match_start_utc=match.start_time_utc,
+                    prefer_home=False,
+                    team_espn_id=ext.get("away_espn_id"),
+                    exclude_event_id=ext.get("espn_id"),
+                    db=db,
+                )
+
+                h_form_val = h_global["form"] if h_global["form"] else details.get("home_form")
+                a_form_val = a_global["form"] if a_global["form"] else details.get("away_form")
+                h_rm_val = h_global["recent_matches"] if h_global["recent_matches"] else (details.get("home_recent_matches") or [])
+                a_rm_val = a_global["recent_matches"] if a_global["recent_matches"] else (details.get("away_recent_matches") or [])
+
+                ctx.home_form = json.dumps(h_form_val) if h_form_val is not None else None
+                ctx.away_form = json.dumps(a_form_val) if a_form_val is not None else None
+                ctx.home_goals_avg = h_global["goals_avg"] if h_global["goals_avg"] is not None else details["home_goals_avg"]
+                ctx.away_goals_avg = a_global["goals_avg"] if a_global["goals_avg"] is not None else details["away_goals_avg"]
+                ctx.home_conceded_avg = h_global["conceded_avg"] if h_global["conceded_avg"] is not None else details["home_conceded_avg"]
+                ctx.away_conceded_avg = a_global["conceded_avg"] if a_global["conceded_avg"] is not None else details["away_conceded_avg"]
+                ctx.home_rest_days = h_global["rest_days"] if h_global["rest_days"] is not None else details.get("home_rest_days")
+                ctx.away_rest_days = a_global["rest_days"] if a_global["rest_days"] is not None else details.get("away_rest_days")
                 ctx.injuries_json = json.dumps(injuries_payload, ensure_ascii=False)
                 ctx.context_updated_at = now
-                if details.get("home_recent_matches") or details.get("away_recent_matches"):
+                if h_rm_val or a_rm_val:
                     from utils.cache import set_cached_json
                     set_cached_json(
                         db,
-                        f"recent_matches:{match.id}",
+                        f"recent_v4:{match.id}",
                         {
-                            "home": details.get("home_recent_matches") or [],
-                            "away": details.get("away_recent_matches") or [],
+                            "home": h_rm_val,
+                            "away": a_rm_val,
+                            "home_source": h_global.get("source"),
+                            "away_source": a_global.get("source"),
                         },
                     )
 
@@ -493,6 +519,8 @@ def run_sync_pipeline(
                 ctx.away_elo = None
 
         db.commit()
+        # Ensure all remaining SCHEDULED matches (including non-ESPN leagues) get global form & recent_v4
+        refresh_all_active_forms(db, force_refresh=False, only_missing=True)
         odds_api_res = sync_the_odds_api(db)
         db.commit()
         # Lock closing odds & CLV for matches starting within <= 25 minutes
@@ -625,3 +653,142 @@ def run_sync_pipeline(
                 pass
         db.close()
         _SYNC_LOCK.release()
+
+
+def refresh_all_active_forms(
+    db: Session,
+    force_refresh: bool = True,
+    only_missing: bool = False,
+) -> dict[str, Any]:
+    """
+    Refresh global recent matches & form for all SCHEDULED matches using 0 Odds API credits.
+    Bounded concurrency (max_workers=6) and per-team timeout (5.5s).
+    """
+    import time as _time
+    from utils.cache import get_cached_json, set_cached_json
+    from utils.team_matcher import normalize_team_name
+
+    t0 = _time.monotonic()
+    scheduled = db.query(Match).filter(Match.status == "SCHEDULED").all()
+    if not scheduled:
+        return {
+            "ok": True,
+            "total_matches": 0,
+            "total_teams": 0,
+            "updated_teams": 0,
+            "coverage_pct": 0.0,
+            "source_breakdown": {},
+            "elapsed_sec": 0.0,
+        }
+
+    # Determine which teams need fetching
+    team_tasks: dict[str, tuple[str, datetime, Optional[bool]]] = {}
+    for m in scheduled:
+        if only_missing:
+            existing_rm = get_cached_json(db, f"recent_v4:{m.id}", ttl_hours=6.0)
+            if isinstance(existing_rm, dict) and (existing_rm.get("home") or existing_rm.get("away")):
+                continue
+        for tname, pref_home in ((m.home_team, True), (m.away_team, False)):
+            nk = normalize_team_name(tname)
+            if nk and nk not in team_tasks:
+                team_tasks[nk] = (tname, m.start_time_utc, pref_home)
+
+    if not team_tasks and only_missing:
+        return {
+            "ok": True,
+            "total_matches": len(scheduled),
+            "total_teams": len({normalize_team_name(t) for m in scheduled for t in (m.home_team, m.away_team)}),
+            "updated_teams": 0,
+            "coverage_pct": 100.0,
+            "source_breakdown": {},
+            "elapsed_sec": round(_time.monotonic() - t0, 2),
+        }
+
+    def _fetch_team(item: tuple[str, tuple[str, datetime, Optional[bool]]]):
+        nk, (tname, dt_utc, pref_home) = item
+        try:
+            res = fetch_global_team_recent_matches(
+                tname,
+                match_start_utc=dt_utc,
+                prefer_home=pref_home,
+                db=None,  # thread-safe: avoid sharing SQLAlchemy session across threads
+                timeout=5.5,
+            )
+            return nk, res
+        except Exception:
+            return nk, {"form": [], "recent_matches": [], "goals_avg": None, "conceded_avg": None, "rest_days": None, "source": None}
+
+    results_by_norm: dict[str, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        for nk, res in pool.map(_fetch_team, list(team_tasks.items())):
+            results_by_norm[nk] = res
+            if res.get("recent_matches"):
+                set_cached_json(db, f"global_team_recent:v4:{nk}", res)
+
+    source_breakdown: dict[str, int] = {}
+    covered_teams: set[str] = set()
+    all_teams: set[str] = set()
+
+    for m in scheduled:
+        hk = normalize_team_name(m.home_team)
+        ak = normalize_team_name(m.away_team)
+        all_teams.add(hk)
+        all_teams.add(ak)
+
+        h_res = results_by_norm.get(hk)
+        a_res = results_by_norm.get(ak)
+        if not force_refresh and (h_res is None or a_res is None):
+            continue
+
+        ctx = db.query(MatchContext).filter(MatchContext.match_id == m.id).first()
+        if not ctx:
+            ctx = MatchContext(match_id=m.id)
+            db.add(ctx)
+
+        if h_res and h_res.get("recent_matches"):
+            ctx.home_form = json.dumps(h_res["form"])
+            if ctx.home_goals_avg is None or force_refresh:
+                ctx.home_goals_avg = h_res.get("goals_avg")
+                ctx.home_conceded_avg = h_res.get("conceded_avg")
+            if ctx.home_rest_days is None and h_res.get("rest_days") is not None:
+                ctx.home_rest_days = h_res.get("rest_days")
+            covered_teams.add(hk)
+            src = h_res.get("source") or "unknown"
+            source_breakdown[src] = source_breakdown.get(src, 0) + 1
+
+        if a_res and a_res.get("recent_matches"):
+            ctx.away_form = json.dumps(a_res["form"])
+            if ctx.away_goals_avg is None or force_refresh:
+                ctx.away_goals_avg = a_res.get("goals_avg")
+                ctx.away_conceded_avg = a_res.get("conceded_avg")
+            if ctx.away_rest_days is None and a_res.get("rest_days") is not None:
+                ctx.away_rest_days = a_res.get("rest_days")
+            covered_teams.add(ak)
+            src = a_res.get("source") or "unknown"
+            source_breakdown[src] = source_breakdown.get(src, 0) + 1
+
+        if (h_res and h_res.get("recent_matches")) or (a_res and a_res.get("recent_matches")):
+            set_cached_json(
+                db,
+                f"recent_v4:{m.id}",
+                {
+                    "home": (h_res or {}).get("recent_matches") or [],
+                    "away": (a_res or {}).get("recent_matches") or [],
+                    "home_source": (h_res or {}).get("source"),
+                    "away_source": (a_res or {}).get("source"),
+                },
+            )
+
+    db.commit()
+    total_teams = len(all_teams)
+    updated_teams = len(covered_teams)
+    coverage_pct = round((updated_teams / total_teams) * 100.0, 1) if total_teams else 0.0
+    return {
+        "ok": True,
+        "total_matches": len(scheduled),
+        "total_teams": total_teams,
+        "updated_teams": updated_teams,
+        "coverage_pct": coverage_pct,
+        "source_breakdown": source_breakdown,
+        "elapsed_sec": round(_time.monotonic() - t0, 2),
+    }

@@ -667,86 +667,131 @@ export function MatchDetailDrawer({
 
                   {/* 4) Form & Goal Averages (Lettered boxes kept here!) */}
                   <div className="p-4 rounded-2xl bg-[#0B0F17] border border-[#1F2937] space-y-3">
-                    <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
-                      Son 5 Maç Formu & Gol Ortalamaları
-                    </h4>
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                        Son 5 Maç Formu & Gol Ortalamaları
+                      </h4>
+                      <span className="text-[10px] text-slate-500">En yeni solda</span>
+                    </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {[
                         {
                           team: detail.home_team,
                           logo: detail.home_logo_url,
-                          gf: detail.context.home_goals_avg,
-                          ga: detail.context.home_conceded_avg,
                           form: detail.context.home_form,
                           recentMatches: detail.context.home_recent_matches || [],
                         },
                         {
                           team: detail.away_team,
                           logo: detail.away_logo_url,
-                          gf: detail.context.away_goals_avg,
-                          ga: detail.context.away_conceded_avg,
                           form: detail.context.away_form,
                           recentMatches: detail.context.away_recent_matches || [],
                         },
-                      ].map((side) => (
-                        <div
-                          key={side.team}
-                          className="p-3 rounded-xl bg-[#131926] border border-[#1F2937] space-y-2"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <TeamBadge name={side.team} logoUrl={side.logo} />
-                              <p className="text-xs font-semibold text-slate-200 truncate">
-                                {side.team}
+                      ].map((side) => {
+                        const top5 = side.recentMatches.slice(0, 5);
+                        const displayedForm =
+                          top5.length > 0 ? top5.map((r) => r.result) : side.form;
+                        const gfAvg =
+                          top5.length > 0
+                            ? (
+                                top5.reduce(
+                                  (acc, r) => acc + (r.is_home ? r.home_score : r.away_score),
+                                  0
+                                ) / top5.length
+                              ).toFixed(2)
+                            : null;
+                        const gaAvg =
+                          top5.length > 0
+                            ? (
+                                top5.reduce(
+                                  (acc, r) => acc + (r.is_home ? r.away_score : r.home_score),
+                                  0
+                                ) / top5.length
+                              ).toFixed(2)
+                            : null;
+
+                        return (
+                          <div
+                            key={side.team}
+                            className="p-3 rounded-xl bg-[#131926] border border-[#1F2937] space-y-2 min-w-0"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <TeamBadge name={side.team} logoUrl={side.logo} />
+                                <p className="text-xs font-semibold text-slate-200 truncate">
+                                  {side.team}
+                                </p>
+                              </div>
+                              <FormStrip form={displayedForm} variant="boxes" />
+                            </div>
+                            {top5.length > 0 ? (
+                              <>
+                                <div className="flex items-center justify-between text-[11px] text-slate-400 mono-nums pt-1 border-t border-[#1F2937]/70">
+                                  <span>
+                                    Atılan: <strong className="text-emerald-400">{gfAvg}</strong>
+                                  </span>
+                                  <span>
+                                    Yenilen: <strong className="text-rose-400">{gaAvg}</strong>
+                                  </span>
+                                </div>
+                                <div className="pt-1.5 border-t border-[#1F2937]/60 space-y-1.5">
+                                  {top5.map((rm, rIdx) => {
+                                    const resBadge =
+                                      rm.result === "W"
+                                        ? { lbl: "G", cls: "bg-emerald-500/20 text-emerald-400" }
+                                        : rm.result === "D"
+                                        ? { lbl: "B", cls: "bg-amber-500/20 text-amber-400" }
+                                        : { lbl: "M", cls: "bg-rose-500/20 text-rose-400" };
+                                    return (
+                                      <div
+                                        key={`${rm.event_id}-${rIdx}`}
+                                        className="flex items-center gap-1.5 text-[10px] min-w-0"
+                                        title={rm.competition ? `${rm.competition}: ${rm.home_team} ${rm.home_score}-${rm.away_score} ${rm.away_team}` : undefined}
+                                      >
+                                        <span className="text-slate-500 mono-nums shrink-0 w-8">
+                                          {rm.date_tr}
+                                        </span>
+                                        <div className="flex-1 min-w-0 grid grid-cols-[1fr_auto_1fr] items-center gap-1">
+                                          <span
+                                            className={`truncate text-right ${
+                                              rm.is_home
+                                                ? "text-white font-semibold"
+                                                : "text-slate-400"
+                                            }`}
+                                          >
+                                            {rm.home_team}
+                                          </span>
+                                          <span className="px-1 py-0.5 rounded bg-white/[0.05] text-slate-100 font-bold mono-nums shrink-0">
+                                            {rm.home_score}-{rm.away_score}
+                                          </span>
+                                          <span
+                                            className={`truncate text-left ${
+                                              !rm.is_home
+                                                ? "text-white font-semibold"
+                                                : "text-slate-400"
+                                            }`}
+                                          >
+                                            {rm.away_team}
+                                          </span>
+                                        </div>
+                                        <span
+                                          className={`w-4 h-4 rounded-[4px] font-bold flex items-center justify-center shrink-0 ${resBadge.cls}`}
+                                        >
+                                          {resBadge.lbl}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </>
+                            ) : (
+                              <p className="text-[10px] text-slate-500 pt-1.5 border-t border-[#1F2937]/60">
+                                Son maç verisi bulunamadı
                               </p>
-                            </div>
-                            <FormStrip form={side.form} variant="boxes" />
+                            )}
                           </div>
-                          <div className="flex items-center justify-between text-[11px] text-slate-400 mono-nums pt-1 border-t border-[#1F2937]/70">
-                            <span>
-                              Atılan: <strong className="text-emerald-400">{side.gf ?? "—"}</strong>
-                            </span>
-                            <span>
-                              Yenilen: <strong className="text-rose-400">{side.ga ?? "—"}</strong>
-                            </span>
-                          </div>
-                          {side.recentMatches.length > 0 ? (
-                            <div className="pt-1.5 border-t border-[#1F2937]/60 space-y-1">
-                              {side.recentMatches.slice(0, 5).map((rm, rIdx) => {
-                                const resBadge =
-                                  rm.result === "W"
-                                    ? { lbl: "G", cls: "bg-emerald-500/20 text-emerald-400" }
-                                    : rm.result === "D"
-                                    ? { lbl: "B", cls: "bg-amber-500/20 text-amber-400" }
-                                    : { lbl: "M", cls: "bg-rose-500/20 text-rose-400" };
-                                return (
-                                  <div
-                                    key={`${rm.event_id}-${rIdx}`}
-                                    className="flex items-center justify-between gap-1.5 text-[10px]"
-                                  >
-                                    <span className="text-slate-500 mono-nums shrink-0">{rm.date_tr}</span>
-                                    <span className="text-slate-300 truncate flex-1">
-                                      {rm.is_home ? "Ev" : "Dep"} · {rm.opponent}
-                                    </span>
-                                    <span className="text-slate-200 font-bold mono-nums shrink-0">
-                                      {rm.home_score}-{rm.away_score}
-                                    </span>
-                                    <span
-                                      className={`w-4 h-4 rounded-[4px] font-bold flex items-center justify-center shrink-0 ${resBadge.cls}`}
-                                    >
-                                      {resBadge.lbl}
-                                    </span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <p className="text-[10px] text-slate-500 pt-1 border-t border-[#1F2937]/60">
-                              Son maç detayı sınırlı
-                            </p>
-                          )}
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
 

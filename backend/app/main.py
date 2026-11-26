@@ -328,6 +328,19 @@ def admin_telegram_setup_webhook(x_cron_secret: Optional[str] = Header(default=N
     return setup_telegram_webhook()
 
 
+@app.post("/api/admin/refresh-forms")
+def admin_refresh_forms(
+    x_cron_secret: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _verify_cron_secret(x_cron_secret)
+    from services.sync import refresh_all_active_forms
+
+    res = refresh_all_active_forms(db, force_refresh=True, only_missing=False)
+    clear_api_cache()
+    return res
+
+
 class AnnouncementCreateIn(BaseModel):
     text: str
     link_url: Optional[str] = None

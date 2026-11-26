@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests
 from rapidfuzz import fuzz
 
+from utils.team_matcher import normalize_team_name, strict_team_match_score
 from utils.time_utils import to_tr_datetime
 
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
@@ -1172,3 +1173,493 @@ def get_target_espn_dates() -> list[str]:
         (now + timedelta(days=1)).strftime("%Y%m%d"),
         (now + timedelta(days=2)).strftime("%Y%m%d"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Global Multi-Source Recent Matches Engine (v4)
+# ---------------------------------------------------------------------------
+
+FRIENDLY_COMP_KEYWORDS = (
+    "friendly",
+    "friendlies",
+    "hazirlik",
+    "test match",
+    "exhibition",
+    "amistoso",
+    "freundschaftsspiel",
+    "club friend",
+)
+
+CONTINENTAL_CUP_KEYWORDS = (
+    "uefa",
+    "champions league",
+    "europa league",
+    "conference league",
+    "libertadores",
+    "sudamericana",
+    "afc champions",
+    "caf champions",
+    "concacaf champions",
+)
+
+
+def _norm_comp_text(name: str) -> str:
+    tr_map = str.maketrans({"ç": "c", "ğ": "g", "ı": "i", "İ": "i", "ö": "o", "ş": "s", "ü": "u"})
+    text = (name or "").translate(tr_map).lower()
+    text = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in text if not unicodedata.combining(ch))
+
+
+def is_friendly_competition(comp_name: str) -> bool:
+    norm = _norm_comp_text(comp_name)
+    return any(kw in norm for kw in FRIENDLY_COMP_KEYWORDS)
+
+
+def is_cup_only_or_stale(
+    records: list[dict[str, Any]],
+    ref_utc: datetime,
+    max_stale_days: int = 20,
+) -> bool:
+    """
+    Reject incomplete sources (e.g. ESPN returning only continental cup matches
+    while skipping the domestic league, or returning stale matches >20 days old).
+    """
+    if not records:
+        return True
+    newest_dt = records[0].get("dt")
+    if isinstance(newest_dt, str):
+        try:
+            newest_dt = datetime.fromisoformat(newest_dt.replace("Z", "+00:00"))
+        except ValueError:
+            newest_dt = None
+    if isinstance(newest_dt, datetime):
+        if newest_dt.tzinfo is None:
+            newest_dt = newest_dt.replace(tzinfo=timezone.utc)
+        if (ref_utc - newest_dt).total_seconds() > max_stale_days * 86400:
+            return True
+
+    comps = [_norm_comp_text(str(r.get("competition") or "")) for r in records[:5] if r.get("competition")]
+    if comps and all(any(ck in c for ck in CONTINENTAL_CUP_KEYWORDS) for c in comps):
+        return True
+    return False
+
+
+def _build_recent_profile_from_records(
+    records: list[dict[str, Any]],
+    ref_utc: datetime,
+    prefer_home: Optional[bool] = None,
+    source: str = "",
+) -> dict[str, Any]:
+    """Build unified form, recent_matches (max 5, newest first), and goal averages."""
+    if not records:
+        return {
+            "form": [],
+            "recent_matches": [],
+            "goals_avg": None,
+            "conceded_avg": None,
+            "rest_days": None,
+            "source": source or None,
+        }
+
+    records.sort(key=lambda r: r["dt"], reverse=True)
+    # Deduplicate by (date_tr, home_team, away_team)
+    deduped: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, str, str]] = set()
+    for r in records:
+        d_tr = to_tr_datetime(r["dt"]).strftime("%d.%m.%Y")
+        k = (d_tr, r["home_team"].lower(), r["away_team"].lower())
+        if k in seen_keys:
+            continue
+        seen_keys.add(k)
+        deduped.append(r)
+
+    rest_days: Optional[int] = None
+    if deduped:
+        days = int(round((ref_utc - deduped[0]["dt"]).total_seconds() / 86400.0))
+        if 0 <= days <= 14:
+            rest_days = days
+
+    gf_w_sum = 0.0
+    ga_w_sum = 0.0
+    w_total = 0.0
+    venue_gf_sum = 0.0
+    venue_ga_sum = 0.0
+    venue_w_total = 0.0
+
+    for idx, r in enumerate(deduped[:10]):
+        w = FORM_TIME_WEIGHTS[idx] if idx < len(FORM_TIME_WEIGHTS) else 0.18
+        gf = r["gf"]
+        ga = r["ga"]
+        gf_w_sum += gf * w
+        ga_w_sum += ga * w
+        w_total += w
+        if prefer_home is not None and r["is_home"] == prefer_home:
+            venue_gf_sum += gf * w
+            venue_ga_sum += ga * w
+            venue_w_total += w
+
+    if w_total > 0 and venue_w_total >= 1.2:
+        goals_avg = round(((gf_w_sum / w_total) * 0.65) + ((venue_gf_sum / venue_w_total) * 0.35), 2)
+        conceded_avg = round(((ga_w_sum / w_total) * 0.65) + ((venue_ga_sum / venue_w_total) * 0.35), 2)
+    elif w_total > 0:
+        goals_avg = round(gf_w_sum / w_total, 2)
+        conceded_avg = round(ga_w_sum / w_total, 2)
+    else:
+        goals_avg = None
+        conceded_avg = None
+
+    top5 = deduped[:5]
+    form = [r["result"] for r in top5]
+    recent_matches = [
+        {
+            "event_id": str(r["event_id"]),
+            "date_tr": to_tr_datetime(r["dt"]).strftime("%d.%m"),
+            "competition": r.get("competition") or "",
+            "home_team": r["home_team"],
+            "away_team": r["away_team"],
+            "opponent": r["opponent"],
+            "is_home": bool(r["is_home"]),
+            "home_score": int(r["home_score"]),
+            "away_score": int(r["away_score"]),
+            "result": r["result"],
+        }
+        for r in top5
+    ]
+
+    return {
+        "form": form,
+        "recent_matches": recent_matches,
+        "goals_avg": goals_avg,
+        "conceded_avg": conceded_avg,
+        "rest_days": rest_days,
+        "source": source or None,
+    }
+
+
+def _fetch_365scores_team_records(
+    client: httpx.Client,
+    team_name: str,
+    ref_utc: datetime,
+) -> list[dict[str, Any]]:
+    queries = [team_name]
+    norm_q = normalize_team_name(team_name)
+    if norm_q and norm_q.lower() != team_name.lower():
+        queries.append(norm_q)
+
+    best_cid: Optional[str] = None
+    best_score = 0.0
+    for q in queries:
+        try:
+            rs = client.get(
+                f"https://webws.365scores.com/web/search/?query={quote_plus(q)}&langId=1&timezoneName=Europe/Istanbul",
+                timeout=3.5,
+            )
+            if rs.status_code != 200:
+                continue
+            for comp in rs.json().get("competitors") or []:
+                if comp.get("sportId") not in (None, 1):
+                    continue
+                cname = str(comp.get("name") or "")
+                sc = strict_team_match_score(team_name, cname, str(comp.get("competitionDisplayName") or ""))
+                if sc >= 78.0 and sc > best_score:
+                    best_score = sc
+                    best_cid = str(comp.get("id") or "")
+            if best_cid:
+                break
+        except Exception:
+            return []
+
+    if not best_cid:
+        return []
+
+    try:
+        rg = client.get(
+            f"https://webws.365scores.com/web/games/results/?competitors={best_cid}&langId=1&timezoneName=Europe/Istanbul",
+            timeout=4.5,
+        )
+        if rg.status_code != 200:
+            return []
+        games = rg.json().get("games") or []
+    except Exception:
+        return []
+
+    records: list[dict[str, Any]] = []
+    for g in games:
+        if g.get("statusGroup") not in (4,):
+            continue
+        comp_name = str(g.get("competitionDisplayName") or "")
+        if is_friendly_competition(comp_name):
+            continue
+        raw_dt = g.get("startTime") or ""
+        try:
+            dt = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if dt >= ref_utc:
+            continue
+
+        hc = g.get("homeCompetitor") or {}
+        ac = g.get("awayCompetitor") or {}
+        try:
+            hs = int(hc.get("score"))
+            as_ = int(ac.get("score"))
+        except (TypeError, ValueError):
+            continue
+        if hs < 0 or as_ < 0:
+            continue
+
+        is_home = str(hc.get("id") or "") == best_cid
+        gf = hs if is_home else as_
+        ga = as_ if is_home else hs
+        res = "W" if gf > ga else ("D" if gf == ga else "L")
+        h_name = str(hc.get("name") or "")
+        a_name = str(ac.get("name") or "")
+        records.append({
+            "event_id": str(g.get("id") or ""),
+            "dt": dt,
+            "competition": comp_name,
+            "home_team": h_name,
+            "away_team": a_name,
+            "opponent": a_name if is_home else h_name,
+            "is_home": is_home,
+            "home_score": hs,
+            "away_score": as_,
+            "gf": gf,
+            "ga": ga,
+            "result": res,
+        })
+    return records
+
+
+def _fetch_fotmob_team_records(
+    client: httpx.Client,
+    team_name: str,
+    ref_utc: datetime,
+) -> list[dict[str, Any]]:
+    queries = [team_name]
+    norm_q = normalize_team_name(team_name)
+    if norm_q and norm_q.lower() != team_name.lower():
+        queries.append(norm_q)
+
+    best_tid: Optional[str] = None
+    best_score = 0.0
+    for q in queries:
+        try:
+            rs = client.get(
+                f"https://www.fotmob.com/api/data/search/suggest?term={quote_plus(q)}",
+                timeout=4.5,
+            )
+            if rs.status_code != 200:
+                continue
+            for grp in rs.json() or []:
+                for sug in grp.get("suggestions") or []:
+                    if sug.get("type") != "team":
+                        continue
+                    cname = str(sug.get("name") or "")
+                    lname = str(sug.get("leagueName") or "")
+                    sc = strict_team_match_score(team_name, cname, lname)
+                    if sc >= 78.0 and sc > best_score:
+                        best_score = sc
+                        best_tid = str(sug.get("id") or "")
+            if best_tid:
+                break
+        except Exception:
+            continue
+
+    if not best_tid:
+        return []
+
+    try:
+        rt = client.get(f"https://www.fotmob.com/api/data/teams?id={best_tid}", timeout=5.0)
+        if rt.status_code != 200:
+            return []
+        fixtures = ((rt.json().get("fixtures") or {}).get("allFixtures") or {}).get("fixtures") or []
+    except Exception:
+        return []
+
+    records: list[dict[str, Any]] = []
+    for f in fixtures:
+        st = f.get("status") or {}
+        if not st.get("finished") or st.get("cancelled") or st.get("awarded"):
+            continue
+        comp_name = str((f.get("tournament") or {}).get("name") or f.get("leagueName") or "")
+        if is_friendly_competition(comp_name):
+            continue
+        raw_dt = st.get("utcTime") or ""
+        try:
+            dt = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if dt >= ref_utc:
+            continue
+
+        hc = f.get("home") or {}
+        ac = f.get("away") or {}
+        try:
+            hs = int(hc.get("score"))
+            as_ = int(ac.get("score"))
+        except (TypeError, ValueError):
+            continue
+        if hs < 0 or as_ < 0:
+            continue
+
+        is_home = str(hc.get("id") or "") == best_tid
+        gf = hs if is_home else as_
+        ga = as_ if is_home else hs
+        res = "W" if gf > ga else ("D" if gf == ga else "L")
+        h_name = str(hc.get("name") or "")
+        a_name = str(ac.get("name") or "")
+        records.append({
+            "event_id": str(f.get("id") or ""),
+            "dt": dt,
+            "competition": comp_name,
+            "home_team": h_name,
+            "away_team": a_name,
+            "opponent": a_name if is_home else h_name,
+            "is_home": is_home,
+            "home_score": hs,
+            "away_score": as_,
+            "gf": gf,
+            "ga": ga,
+            "result": res,
+        })
+    return records
+
+
+def _fetch_espn_team_records_fallback(
+    client: httpx.Client,
+    team_espn_id: str,
+    ref_utc: datetime,
+    exclude_event_id: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    if not team_espn_id:
+        return []
+    try:
+        r = client.get(f"{ESPN_BASE}/all/teams/{team_espn_id}/schedule", timeout=4.5)
+        if r.status_code != 200:
+            return []
+        events = r.json().get("events") or []
+    except Exception:
+        return []
+
+    excl = str(exclude_event_id or "").strip()
+    records: list[dict[str, Any]] = []
+    for ev in events:
+        eid = str(ev.get("id") or "").strip()
+        if excl and eid == excl:
+            continue
+        comp = (ev.get("competitions") or [{}])[0]
+        if not comp.get("status", {}).get("type", {}).get("completed"):
+            continue
+        comp_name = str((ev.get("league") or {}).get("name") or (ev.get("league") or {}).get("slug") or "")
+        if is_friendly_competition(comp_name):
+            continue
+        raw_dt = ev.get("date") or ""
+        try:
+            dt = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if dt >= ref_utc:
+            continue
+
+        competitors = comp.get("competitors") or []
+        my_comp = next((c for c in competitors if str((c.get("team") or {}).get("id", "")) == str(team_espn_id)), None)
+        opp_comp = next((c for c in competitors if str((c.get("team") or {}).get("id", "")) != str(team_espn_id)), None)
+        if not my_comp or not opp_comp:
+            continue
+        gf = _extract_score_int(my_comp.get("score"))
+        ga = _extract_score_int(opp_comp.get("score"))
+        if gf is None or ga is None:
+            continue
+
+        is_home = my_comp.get("homeAway") == "home"
+        my_name = str((my_comp.get("team") or {}).get("displayName") or (my_comp.get("team") or {}).get("shortDisplayName") or "")
+        opp_name = str((opp_comp.get("team") or {}).get("displayName") or (opp_comp.get("team") or {}).get("shortDisplayName") or "")
+        records.append({
+            "event_id": eid,
+            "dt": dt,
+            "competition": comp_name,
+            "home_team": my_name if is_home else opp_name,
+            "away_team": opp_name if is_home else my_name,
+            "opponent": opp_name,
+            "is_home": is_home,
+            "home_score": gf if is_home else ga,
+            "away_score": ga if is_home else gf,
+            "gf": gf,
+            "ga": ga,
+            "result": "W" if gf > ga else ("D" if gf == ga else "L"),
+        })
+    return records
+
+
+def fetch_global_team_recent_matches(
+    team_name: str,
+    match_start_utc: Optional[datetime] = None,
+    prefer_home: Optional[bool] = None,
+    team_espn_id: Optional[str] = None,
+    exclude_event_id: Optional[str] = None,
+    db: Any = None,
+    timeout: float = 5.5,
+) -> dict[str, Any]:
+    """
+    Global multi-source recent matches fetcher:
+    1) 365Scores Web JSON
+    2) FotMob Web JSON
+    3) ESPN Schedule (last resort, only if not cup-only or stale >20d)
+    """
+    now_utc = datetime.now(timezone.utc)
+    ref_utc = (
+        match_start_utc.replace(tzinfo=timezone.utc)
+        if (match_start_utc and match_start_utc.tzinfo is None)
+        else (match_start_utc or now_utc)
+    )
+    if ref_utc > now_utc:
+        ref_utc = now_utc
+
+    norm_key = normalize_team_name(team_name)
+    cache_key = f"global_team_recent:v4:{norm_key}"
+    if db is not None and norm_key:
+        from utils.cache import get_cached_json
+        cached = get_cached_json(db, cache_key, ttl_hours=4.0)
+        if isinstance(cached, dict) and cached.get("recent_matches"):
+            return cached
+
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    with httpx.Client(timeout=timeout, headers=headers) as client:
+        sources: list[tuple[str, Any]] = [
+            ("365scores", lambda: _fetch_365scores_team_records(client, team_name, ref_utc)),
+            ("fotmob", lambda: _fetch_fotmob_team_records(client, team_name, ref_utc)),
+        ]
+        if team_espn_id:
+            sources.append(
+                ("espn", lambda: _fetch_espn_team_records_fallback(client, team_espn_id, ref_utc, exclude_event_id))
+            )
+
+        for src_name, fetcher in sources:
+            recs = fetcher()
+            if not recs:
+                continue
+            recs.sort(key=lambda r: r["dt"], reverse=True)
+            if is_cup_only_or_stale(recs, ref_utc):
+                continue
+            prof = _build_recent_profile_from_records(recs, ref_utc, prefer_home=prefer_home, source=src_name)
+            if prof["recent_matches"]:
+                if db is not None and norm_key:
+                    from utils.cache import set_cached_json
+                    set_cached_json(db, cache_key, prof)
+                return prof
+
+    return {
+        "form": [],
+        "recent_matches": [],
+        "goals_avg": None,
+        "conceded_avg": None,
+        "rest_days": None,
+        "source": None,
+    }
