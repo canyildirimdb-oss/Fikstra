@@ -92,9 +92,36 @@ def _injury_xg_factors(injuries: list[dict[str, Any]]) -> tuple[float, float]:
     return min(0.14, atk_burden), min(0.14, def_burden)
 
 
+def _is_cross_league_match(league: str, country: str) -> bool:
+    """Detect European cup, international, or cross-league competitions."""
+    text = f"{country} {league}".lower()
+    keywords = (
+        "champions league",
+        "europa league",
+        "conference league",
+        "şampiyonlar ligi",
+        "avrupa ligi",
+        "konferans ligi",
+        "uefa",
+        "fifa",
+        "libertadores",
+        "sudamericana",
+        "afc ",
+        "caf ",
+        "world cup",
+        "nations league",
+        "europe",
+        "international",
+        "kıtalararası",
+    )
+    return any(kw in text for kw in keywords)
+
+
 def _compute_dixon_coles_probs(
     ctx: Optional[MatchContext],
     data_status: str = "",
+    league: str = "",
+    country: str = "",
 ) -> dict[str, Any]:
     """
     Motor v4.0 Dixon-Coles (rho=-0.10) Poisson model with:
@@ -148,6 +175,26 @@ def _compute_dixon_coles_probs(
     if ctx.away_true_xg is not None and ctx.away_true_xga is not None:
         a_gf = xg_w * ctx.away_true_xg + (1.0 - xg_w) * a_gf
         a_ga = xg_w * ctx.away_true_xga + (1.0 - xg_w) * a_ga
+
+    # Cross-league / European cup domestic-xG damping:
+    # A weak domestic league team's inflated domestic GF / deflated GA must be damped
+    # by the Elo gap before combining with an elite club's attack/defense.
+    if ctx.home_elo is not None and ctx.away_elo is not None:
+        elo_gap = ctx.home_elo - ctx.away_elo
+        is_cross = _is_cross_league_match(league, country)
+        gap_threshold = 80.0 if is_cross else 120.0
+        if abs(elo_gap) >= gap_threshold:
+            capped_gap = min(400.0, abs(elo_gap))
+            damp = max(0.55, 1.0 - (capped_gap - 60.0) / 700.0)
+            leak = min(1.45, 1.0 + (capped_gap - 60.0) / 700.0)
+            if elo_gap > 0:
+                # Away is the weaker-Elo team
+                a_gf *= damp
+                a_ga *= leak
+            else:
+                # Home is the weaker-Elo team
+                h_gf *= damp
+                h_ga *= leak
 
     raw_lam_h = max(0.35, min(3.6, (h_gf + a_ga) / 2.0))
     raw_lam_a = max(0.30, min(3.2, (a_gf + h_ga) / 2.0))
@@ -388,8 +435,8 @@ def _compute_value_component(
         else:
             edge_pts = 1.5
     else:
-        # Neutral baseline when global odds are unavailable (avoid rewarding low odds twice)
-        edge_pts = min(8.5, 4.5 + true_prob * 5.0)
+        # Neutral baseline when global odds are unavailable (no free probability bonus)
+        edge_pts = 4.5
 
     # Edge reward cap: (Calibrated Model Prob - Market Prob) capped at max +8% (+0.08)
     model_market_edge = 0.0
@@ -542,7 +589,25 @@ def _compute_form_goals_component(
     elif (market_key == "MS" and selection_key == "2") or (market_key == "CS" and selection_key == "X2"):
         form_pts = max(2.0, min(12.0, 6.5 + (ap - hp) * 0.6))
     else:
-        form_pts = 7.5
+        form_pts = 6.5
+        if ctx.home_goals_avg is not None and ctx.away_goals_avg is not None:
+            h_gf = ctx.home_goals_avg
+            a_gf = ctx.away_goals_avg
+            h_ga = ctx.home_conceded_avg if ctx.home_conceded_avg is not None else BASE_HOME_GA
+            a_ga = ctx.away_conceded_avg if ctx.away_conceded_avg is not None else BASE_AWAY_GA
+            total_form_goals = ((h_gf + a_ga) / 2.0) + ((a_gf + h_ga) / 2.0)
+            if market_key.startswith("AU_"):
+                if selection_key == "UST" and total_form_goals > 2.6:
+                    form_pts = min(11.0, 6.5 + (total_form_goals - 2.6) * 2.5)
+                elif selection_key == "ALT" and total_form_goals < 2.2:
+                    form_pts = min(11.0, 6.5 + (2.2 - total_form_goals) * 2.5)
+            elif market_key == "KG":
+                if selection_key == "VAR" and min(h_gf, a_gf) >= 1.25 and min(h_ga, a_ga) >= 1.10:
+                    kg_ev = (min(h_gf, a_gf) + min(h_ga, a_ga)) - 2.35
+                    form_pts = min(11.0, 6.5 + max(0.0, kg_ev * 2.0))
+                elif selection_key == "YOK" and (min(h_gf, a_gf) < 0.9 or min(h_ga, a_ga) < 0.8):
+                    kg_low = 1.8 - (min(h_gf, a_gf) + min(h_ga, a_ga))
+                    form_pts = min(10.5, 6.5 + max(0.0, kg_low * 2.0))
 
     model_pts = min(13.0, 4.0 + blended_prob * 11.5)
     total = form_pts + model_pts
@@ -604,42 +669,28 @@ def _quarter_kelly_units(
     global_odd: Optional[float] = None,
 ) -> float:
     """
-    Motor v3.1 Margin-Adjusted Kelly + Confidence Score hybrid unit scale (1.0 - 5.0).
-    Normalizes iddaa's ~14% overround to market fair scale so realistic unit
-    distributions emerge instead of clamping to 1.0.
+    Honest Fractional-Kelly unit scale (0.0 for negative/insufficient EV, 0.5 - 5.0 for +EV).
+    Never invents positive stake units from confidence alone when expected value is negative.
     """
     if trap_warning:
-        return 1.0
+        return 0.0
 
-    # Confidence base curve:
-    # 60-65 -> ~1.5 - 2.1 | 66-72 -> ~2.3 - 3.3 | 73-80+ -> ~3.3 - 4.3
-    if confidence < 55.0:
-        base_units = 1.0
-    elif confidence < 60.0:
-        base_units = 1.0 + (confidence - 55.0) * 0.10
-    elif confidence < 66.0:
-        base_units = 1.5 + (confidence - 60.0) * (0.60 / 6.0)
-    elif confidence < 73.0:
-        base_units = 2.3 + (confidence - 66.0) * (1.00 / 7.0)
-    else:
-        base_units = 3.3 + min(1.0, (confidence - 73.0) * 0.10)
-
-    # Real payout b = odd_val - 1.0 (no artificial 1.14 inflation)
     b = odd_val - 1.0
-    kelly_boost = 0.0
-    if b > 0:
-        raw_k = (b * blended_prob - (1.0 - blended_prob)) / b
-        q_kelly = 0.25 * max(0.0, raw_k)
-        kelly_boost = min(0.90, q_kelly * 14.0)
+    ev_ratio = blended_prob * odd_val
+    if b <= 0 or ev_ratio < 0.98:
+        return 0.0
 
+    raw_k = (b * blended_prob - (1.0 - blended_prob)) / b
+    if raw_k <= 0.0:
+        return 0.0
+
+    q_kelly = 0.25 * raw_k
+    units = q_kelly * 40.0
     if global_odd and global_odd > 1.0:
-        ratio = odd_val / global_odd
-        if ratio >= 1.0:
-            kelly_boost += 0.30
-        elif ratio >= 0.96:
-            kelly_boost += 0.15
+        if odd_val / global_odd >= 1.02:
+            units += 0.2
 
-    return round(max(1.0, min(5.0, base_units + kelly_boost)), 1)
+    return round(max(0.5, min(5.0, units)), 1)
 
 
 def analyze_upcoming_matches(db: Session) -> int:
@@ -681,7 +732,12 @@ def analyze_upcoming_matches(db: Session) -> int:
             hist_by_key[(h.market_key, h.selection_key)].append(h)
 
         ctx = db.query(MatchContext).filter(MatchContext.match_id == match.id).first()
-        dc = _compute_dixon_coles_probs(ctx, match.data_status or "")
+        dc = _compute_dixon_coles_probs(
+            ctx,
+            match.data_status or "",
+            league=match.league or "",
+            country=match.country or "",
+        )
         poisson_map = dc["probs"]
         has_form = bool(ctx and (ctx.home_form or ctx.away_form))
 
@@ -737,15 +793,26 @@ def analyze_upcoming_matches(db: Session) -> int:
             if unconfirmed_high_risk:
                 total_score -= 8.0
 
-            # Controlled ClubElo confidence nudge (max +/- 3.5 pts)
+            # Controlled ClubElo confidence nudge (max +/- 3.5 pts, no double +55 home bias)
             elo_diff = None
             if ctx and ctx.home_elo is not None and ctx.away_elo is not None:
-                elo_diff = round((ctx.home_elo + 55.0) - ctx.away_elo, 1)
+                elo_diff = round(ctx.home_elo - ctx.away_elo, 1)
                 elo_nudge = max(-3.5, min(3.5, elo_diff / 80.0))
                 if (odd.market_key == "MS" and odd.selection_key == "1") or (odd.market_key == "CS" and odd.selection_key == "1X"):
                     total_score += elo_nudge
                 elif (odd.market_key == "MS" and odd.selection_key == "2") or (odd.market_key == "CS" and odd.selection_key == "X2"):
                     total_score -= elo_nudge
+
+            # Negative Expected Value (EV) guard: penalize clearly negative EV picks (-8 to -15 pts)
+            ev_ratio = round(true_prob * odd.iddaa_odd, 4)
+            neg_ev_penalty = 0.0
+            if ev_ratio < 0.92 or (edge_pct is not None and edge_pct < -8.0):
+                ev_deficit = max(0.0, 0.92 - ev_ratio)
+                global_deficit = max(0.0, (-8.0 - edge_pct) / 100.0) if (edge_pct is not None and edge_pct < -8.0) else 0.0
+                worst_deficit = max(ev_deficit, global_deficit)
+                neg_ev_penalty = round(min(15.0, 8.0 + worst_deficit * 50.0), 1)
+                total_score -= neg_ev_penalty
+                total_score = min(total_score, 63.5)
 
             # Motor v5.0: Goal stability / variance adjustment on AU_* and KG markets
             goal_std_adj = 0.0
@@ -781,8 +848,8 @@ def analyze_upcoming_matches(db: Session) -> int:
                 trap_warning=bool(sm["trap_warning"]),
                 global_odd=odd.global_avg_odd,
             )
-            if std_kelly_mult < 1.0 and not sm["trap_warning"]:
-                kelly = round(max(1.0, kelly * std_kelly_mult), 1)
+            if std_kelly_mult < 1.0 and kelly > 0.0 and not sm["trap_warning"]:
+                kelly = round(max(0.5, kelly * std_kelly_mult), 1)
 
             breakdown = {
                 "value": val_s,
@@ -793,6 +860,8 @@ def analyze_upcoming_matches(db: Session) -> int:
                 "poisson_prob_pct": round(p_prob * 100.0, 1) if p_prob is not None else None,
                 "blended_prob_pct": round(blended_prob * 100.0, 1),
                 "poisson_edge_pct": p_edge,
+                "ev_ratio": ev_ratio,
+                "neg_ev_penalty": neg_ev_penalty,
                 "raw_xg_home": dc["raw_xg_h"],
                 "raw_xg_away": dc["raw_xg_a"],
                 "xg_home": dc["adj_xg_h"],
