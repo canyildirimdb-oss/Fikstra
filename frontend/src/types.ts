@@ -428,7 +428,7 @@ export interface SportotoPlan {
 
 export interface TotoChaos {
   score: number;
-  label: "Demir Banko" | "Kırılma Maçı" | "Mayın Tarlası";
+  label: "Banko" | "Dengeli" | "Çok Riskli";
 }
 
 export interface TotoTrapSignal {

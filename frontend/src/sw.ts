@@ -21,8 +21,8 @@ self.addEventListener("push", (event) => {
   const title = data.title || "Fikstra Bildirimi";
   const options: NotificationOptions = {
     body: data.body || "",
-    icon: "/icon-192.png",
-    badge: "/icon-192.png",
+    icon: "/push-icon.png",
+    badge: "/push-badge.png",
     data: { url: data.url || "/" },
   };
 

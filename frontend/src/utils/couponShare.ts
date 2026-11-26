@@ -1,4 +1,5 @@
 import { formatPickWithTeam, formatTurkishDate } from "./format";
+import { drawOfficialLogoMark, loadOfficialLogoMark } from "./logoLoader";
 
 export interface ShareCouponLeg {
   league?: string;
@@ -120,46 +121,6 @@ function drawTeamShield(
   ctx.restore();
 }
 
-function drawFikstraLogo(ctx: CanvasRenderingContext2D, x: number, y: number, size: number) {
-  ctx.save();
-  drawRoundRect(ctx, x, y, size, size, size * 0.22);
-  const bg = ctx.createLinearGradient(x, y, x + size, y + size);
-  bg.addColorStop(0, "#0D1424");
-  bg.addColorStop(1, "#090D16");
-  ctx.fillStyle = bg;
-  ctx.fill();
-  ctx.strokeStyle = "rgba(16, 185, 129, 0.35)";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  const s = size / 512;
-  const fg = ctx.createLinearGradient(x + 120 * s, y + 96 * s, x + 392 * s, y + 416 * s);
-  fg.addColorStop(0, "#34D399");
-  fg.addColorStop(0.55, "#10B981");
-  fg.addColorStop(1, "#06B6D4");
-  ctx.fillStyle = fg;
-
-  ctx.beginPath();
-  ctx.moveTo(x + 154 * s, y + 118 * s);
-  ctx.lineTo(x + 372 * s, y + 118 * s);
-  ctx.lineTo(x + 346 * s, y + 184 * s);
-  ctx.lineTo(x + 224 * s, y + 184 * s);
-  ctx.lineTo(x + 224 * s, y + 234 * s);
-  ctx.lineTo(x + 324 * s, y + 234 * s);
-  ctx.lineTo(x + 300 * s, y + 296 * s);
-  ctx.lineTo(x + 224 * s, y + 296 * s);
-  ctx.lineTo(x + 224 * s, y + 396 * s);
-  ctx.lineTo(x + 154 * s, y + 396 * s);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.arc(x + 358 * s, y + 356 * s, 24 * s, 0, Math.PI * 2);
-  ctx.fillStyle = "#06B6D4";
-  ctx.fill();
-  ctx.restore();
-}
-
 export async function generateCouponSharePng(
   payload: ShareCouponPayload
 ): Promise<{ dataUrl: string; blob: Blob; filename: string }> {
@@ -244,13 +205,16 @@ export async function generateCouponSharePng(
   ctx.fillText(payload.totalOdd.toFixed(2), width - padX, 68);
   ctx.textAlign = "left";
 
-  // Preload CORS-safe logos in parallel (falls back silently to vector shield)
-  const bitmaps = await Promise.all(
-    payload.items.map(async (it) => ({
-      home: await loadCorsSafeBitmap(it.home_logo_url),
-      away: await loadCorsSafeBitmap(it.away_logo_url),
-    }))
-  );
+  // Preload CORS-safe logos & official Fikstra mark in parallel
+  const [logoImg, bitmaps] = await Promise.all([
+    loadOfficialLogoMark(),
+    Promise.all(
+      payload.items.map(async (it) => ({
+        home: await loadCorsSafeBitmap(it.home_logo_url),
+        away: await loadCorsSafeBitmap(it.away_logo_url),
+      }))
+    ),
+  ]);
 
   // Match rows
   let curY = headerH;
@@ -334,8 +298,8 @@ export async function generateCouponSharePng(
   ctx.lineTo(width - padX, footY);
   ctx.stroke();
 
-  // Bottom-left: Fikstra icon + signature + tagline
-  drawFikstraLogo(ctx, padX, footY + 12, 28);
+  // Bottom-left: Official Fikstra logo + signature + tagline
+  drawOfficialLogoMark(ctx, logoImg, padX, footY + 12, 28);
   ctx.fillStyle = "#F8FAFC";
   ctx.font = "800 14px Inter, system-ui, sans-serif";
   ctx.textBaseline = "middle";

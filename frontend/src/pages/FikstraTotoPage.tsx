@@ -4,7 +4,6 @@ import {
   BookmarkPlus,
   Check,
   Copy,
-  Grid3X3,
   Image as ImageIcon,
   Link2,
   Lock,
@@ -35,9 +34,9 @@ const SAVED_TOTO_KEY = "fikstra_saved_toto_v1";
 const BUDGET_OPTIONS = [16, 32, 48, 64, 96, 128, 256] as const;
 
 const MODES: { key: "hit15" | "shield13" | "contrarian"; label: string; desc: string }[] = [
-  { key: "hit15", label: "15'li İsabet", desc: "Maksimum 15/15 olasılığı" },
-  { key: "shield13", label: "13+ Kalkanı", desc: "13 ve 14 barajını korur" },
-  { key: "contrarian", label: "Sürpriz Avcısı", desc: "Tuzak favori & kaos odaklı" },
+  { key: "hit15", label: "15'li Hedef", desc: "Maksimum 15/15 olasılığı" },
+  { key: "shield13", label: "13+ Hedefi", desc: "13 ve 14 barajını korur" },
+  { key: "contrarian", label: "Sürpriz Odaklı", desc: "Riskli favoriler ve yüksek sürpriz" },
 ];
 
 interface Props {
@@ -134,7 +133,7 @@ export function FikstraTotoPage({
 
   const week = current?.active ? current.week : null;
 
-  // 0 ms live client-side calculations
+  // Live client-side calculations
   const liveStats = useMemo(() => {
     if (!week || week.matches.length === 0) return null;
     let cols = 1;
@@ -307,16 +306,18 @@ export function FikstraTotoPage({
       {!week || !liveStats ? (
         /* Honest Empty State Showcase */
         <div className="p-6 sm:p-8 rounded-3xl glass-card space-y-5 text-center">
-          <div className="w-12 h-12 rounded-2xl bg-[#00FF85]/15 border border-[#00FF85]/35 flex items-center justify-center mx-auto">
-            <Grid3X3 className="w-6 h-6 text-[#00FF85]" />
-          </div>
+          <img
+            src="/logo-profile.png"
+            alt="Fikstra"
+            className="w-12 h-12 rounded-2xl border border-[#00FF85]/35 shadow-[0_0_24px_-6px_rgba(0,255,133,0.4)] mx-auto object-cover"
+          />
           <div className="space-y-1.5 max-w-lg mx-auto">
             <h2 className="text-base sm:text-lg font-extrabold text-white">
               Fikstra Toto — Yeni Hafta Bekleniyor
             </h2>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Haftanın 15 maçlık listesi açıldığında gerçek model olasılıkları ve piyasa de-vig
-              hesabıyla matematiksel kolon şablonları burada aktif olur.
+              Haftanın 15 maçlık listesi açıldığında model olasılıkları ve güncel piyasa oranlarıyla
+              hazırlanmış kolon şablonları burada açılır.
             </p>
           </div>
 
@@ -324,23 +325,23 @@ export function FikstraTotoPage({
             {[
               {
                 icon: Wand2,
-                title: "Kesin DP & 13+ Kalkanı",
-                desc: "16–256 kolon bütçeni 15'li isabet veya 13+ ikramiye barajına göre dağıt.",
+                title: "Akıllı Kolon Dağıtımı",
+                desc: "16–256 kolon bütçeni 15'li veya 13+ hedefine göre en verimli maçlara dağıt.",
               },
               {
                 icon: Shield,
-                title: "Canlı Hayatta Kalma & Sayaçlar",
-                desc: "Her 1/X/2 tıkında 12+, 13+, 14+ ve 15/15 ihtimalleri 0 ms'de güncellenir.",
+                title: "Anlık İhtimal Hesabı",
+                desc: "Yaptığın her 1/X/2 seçiminde 12, 13, 14 ve 15 bilme ihtimalin anında hesaplanır.",
               },
               {
                 icon: AlertTriangle,
-                title: "Kaos Skoru & Tuzak Radarı",
-                desc: "Demir bankoları, mayın tarlalarını ve halkın aşırı yüklendiği tuzakları gör.",
+                title: "Maç Risk Analizi",
+                desc: "Banko maçları, riskli karşılaşmaları ve fazla yüklenilen favorileri tek bakışta gör.",
               },
               {
                 icon: Sparkles,
-                title: "Marjinal Hamle Danışmanı",
-                desc: "Tek tıkla en verimli çifte yükseltmeyi ve en zararsız kesintiyi uygula.",
+                title: "Hamle Danışmanı",
+                desc: "Bütçeni büyütürken en mantıklı çifte şansı, azaltırken en risksiz eksiltmeyi tek tıkla gör.",
               },
             ].map((f) => {
               const Icon = f.icon;
@@ -501,9 +502,9 @@ export function FikstraTotoPage({
               const px = Math.round((m.prob_x || 0) * 100);
               const p2 = Math.max(0, 100 - p1 - px);
               const chaosCls =
-                m.chaos?.label === "Demir Banko"
+                m.chaos?.label === "Banko"
                   ? "bg-emerald-500/15 text-[#00FF85] border-emerald-500/30"
-                  : m.chaos?.label === "Mayın Tarlası"
+                  : m.chaos?.label === "Çok Riskli"
                   ? "bg-rose-500/15 text-rose-300 border-rose-500/30"
                   : "bg-amber-500/15 text-amber-300 border-amber-500/30";
               const hit = m.actual_result ? code.includes(m.actual_result) : null;
@@ -536,10 +537,13 @@ export function FikstraTotoPage({
                           )}
                           {m.trap_signal?.is_trap && (
                             <span
-                              title={m.trap_signal.explanation || undefined}
+                              title={
+                                m.trap_signal.explanation ||
+                                "Halkın büyük bölümü bu tarafa yüklenmiş, sürpriz ihtimali yüksek."
+                              }
                               className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-rose-500/20 text-rose-300 border border-rose-500/40"
                             >
-                              TUZAK FAVORİ
+                              RİSKLİ FAVORİ
                             </span>
                           )}
                           <span className="text-[10px] text-slate-400 mono-nums">
@@ -610,7 +614,7 @@ export function FikstraTotoPage({
                   className="p-3 rounded-2xl glass-card hover:border-[#00FF85]/45 text-left space-y-1 transition-colors"
                 >
                   <p className="text-[10px] font-extrabold uppercase tracking-wider text-[#00FF85]">
-                    En Verimli Yükseltme (Tıkla Uygula)
+                    Önerilen Ekleme (Tıkla Uygula)
                   </p>
                   <p className="text-xs font-bold text-slate-100 truncate">
                     #{liveStats.advice.best_upgrade.slot_no} {liveStats.advice.best_upgrade.home_team} -{" "}
@@ -633,7 +637,7 @@ export function FikstraTotoPage({
                   className="p-3 rounded-2xl glass-card hover:border-cyan-500/45 text-left space-y-1 transition-colors"
                 >
                   <p className="text-[10px] font-extrabold uppercase tracking-wider text-cyan-300">
-                    En Az Zararlı Kesinti (Tıkla Uygula)
+                    Önerilen Eksiltme (Tıkla Uygula)
                   </p>
                   <p className="text-xs font-bold text-slate-100 truncate">
                     #{liveStats.advice.safest_downgrade.slot_no} {liveStats.advice.safest_downgrade.home_team} -{" "}

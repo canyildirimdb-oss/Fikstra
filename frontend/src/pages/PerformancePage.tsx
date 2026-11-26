@@ -10,10 +10,11 @@ import {
 } from "recharts";
 import { api } from "../api/client";
 import type { PerformanceData } from "../types";
-import { formatMarketLabel } from "../utils/format";
+import { formatMarketLabel, formatTurkishPossessive } from "../utils/format";
 
 interface Props {
   refreshTrigger: number;
+  onSelectMatch?: (matchId: number) => void;
 }
 
 function MetricInfo({ text }: { text: string }) {
@@ -45,7 +46,7 @@ function parseDayMonthScore(dateStr: string): number {
   return m * 100 + d;
 }
 
-export function PerformancePage({ refreshTrigger }: Props) {
+export function PerformancePage({ refreshTrigger, onSelectMatch }: Props) {
   const [data, setData] = useState<PerformanceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [glossaryOpen, setGlossaryOpen] = useState(false);
@@ -84,13 +85,16 @@ export function PerformancePage({ refreshTrigger }: Props) {
           </p>
           <h2 className="text-lg sm:text-xl font-extrabold text-white mt-0.5">
             {data.total_settled > 0
-              ? `Son ${data.total_settled} tahminin ${data.won_count}'i tuttu`
+              ? `Son ${data.total_settled} tahminin ${formatTurkishPossessive(data.won_count)} tuttu`
               : "İlk sonuçlar bekleniyor"}
           </h2>
           <p className="text-xs text-slate-400 mt-1">
             {data.total_settled > 0
               ? `${data.won_count} Kazandı • ${data.lost_count} Kaybetti`
               : "Maçlar tamamlandığında resmi 90 dk skorlarıyla otomatik işlenir."}
+          </p>
+          <p className="text-[11px] text-emerald-300/75 mt-1.5">
+            Burada yalnızca Analizler ekranında maç başlamadan önce yayınlanan resmi 60+ tahminler yer alır.
           </p>
         </div>
 
@@ -123,7 +127,7 @@ export function PerformancePage({ refreshTrigger }: Props) {
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <div className="p-4 rounded-2xl glass-card">
           <p className="text-[11px] text-slate-400 flex items-center">
-            Ortalama CLV %
+            Oran Avantajı
             <MetricInfo text="Tahmini yakaladığınız oranın maç başlama saatindeki kapanış oranına göre yüzde kaç daha avantajlı olduğunu gösterir." />
           </p>
           <p
@@ -133,18 +137,18 @@ export function PerformancePage({ refreshTrigger }: Props) {
           >
             {data.avg_clv_pct !== null ? `${data.avg_clv_pct > 0 ? "+" : ""}%${data.avg_clv_pct}` : "Bekleniyor"}
           </p>
-          <p className="text-[10px] text-slate-500 mt-0.5">Kapanış oranı farkı</p>
+          <p className="text-[10px] text-slate-500 mt-0.5">Kapanış oranına göre fark</p>
         </div>
 
         <div className="p-4 rounded-2xl bg-[#131926] border border-[#1F2937]">
           <p className="text-[11px] text-slate-400 flex items-center">
-            Brier Skoru
-            <MetricInfo text="Model olasılıklarının gerçek maç sonuçlarına yakınlığını ölçer; 0.25 altı başarılı, sıfıra yaklaştıkça daha keskindir." />
+            Tahmin Tutarlılığı
+            <MetricInfo text="Model olasılıklarının gerçek maç sonuçlarına yakınlığını ölçer; 0'a yaklaştıkça daha isabetlidir." />
           </p>
           <p className="text-xl sm:text-2xl font-extrabold mono-nums text-amber-400 mt-1">
             {data.brier_score !== null ? data.brier_score.toFixed(3) : "—"}
           </p>
-          <p className="text-[10px] text-slate-500 mt-0.5">Düşük = daha iyi kalibre</p>
+          <p className="text-[10px] text-slate-500 mt-0.5">0&apos;a yaklaştıkça daha isabetli</p>
         </div>
 
         {(["BANKO", "DENGELI", "SURPRIZ"] as const).map((tier) => {
@@ -178,7 +182,7 @@ export function PerformancePage({ refreshTrigger }: Props) {
       {/* Confidence Band Calibration Mini Table */}
       <div className="p-4 rounded-2xl bg-[#131926] border border-[#1F2937]">
         <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3">
-          Güven Bandı Kalibrasyonu
+          GÜVEN PUANINA GÖRE İSABET
         </h4>
         <div className="grid grid-cols-3 gap-2">
           {(data.calibration_bands || []).map((b) => {
@@ -371,21 +375,29 @@ export function PerformancePage({ refreshTrigger }: Props) {
           )}
 
           <div className="rounded-2xl bg-[#131926] border border-[#1F2937] overflow-hidden">
-            <div className="px-4 py-3 border-b border-[#1F2937] text-xs font-bold text-slate-200">
-              Sonuçlanan Tahmin Arşivi
+            <div className="px-4 py-3 border-b border-[#1F2937] flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-bold text-slate-200">Sonuçlanan Tahmin Arşivi</span>
+              <span className="text-[10px] text-slate-400">Detay için maça dokun</span>
             </div>
             <div className="divide-y divide-[#1F2937]">
               {data.archive.map((row) => {
                 const isWon = row.status === "WON";
                 return (
-                  <div
+                  <button
                     key={row.prediction_id}
-                    className={`px-4 py-3 flex items-center justify-between gap-3 text-xs border-l-[3px] ${
+                    type="button"
+                    onClick={() => onSelectMatch?.(row.match_id)}
+                    className={`w-full text-left px-4 py-3 flex items-center justify-between gap-3 text-xs border-l-[3px] hover:bg-white/[0.03] transition-colors ${
                       isWon ? "border-l-[#00FF85]" : "border-l-rose-500"
                     }`}
                   >
                     <div className="min-w-0 flex-1">
-                      <p className="text-[10px] text-slate-400 truncate">{row.league}</p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-[10px] text-slate-400 truncate">{row.league}</p>
+                        <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-[#00FF85] text-[10px] font-extrabold mono-nums shrink-0">
+                          {Math.round(row.confidence_score)}
+                        </span>
+                      </div>
                       <p className="font-semibold text-slate-100 leading-snug break-words mt-0.5">
                         {row.home_team}{" "}
                         <span className="mono-nums text-white">
@@ -408,7 +420,7 @@ export function PerformancePage({ refreshTrigger }: Props) {
                         {isWon ? "KAZANDI" : "KAYBETTİ"}
                       </span>
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -423,7 +435,7 @@ export function PerformancePage({ refreshTrigger }: Props) {
           onClick={() => setGlossaryOpen((v) => !v)}
           className="w-full px-4 py-3 flex items-center justify-between text-xs font-bold text-slate-200 hover:bg-white/[0.02]"
         >
-          <span>Metrik Sözlüğü (Kelly Birimi, ClubElo, CLV & Brier)</span>
+          <span>Metrik Sözlüğü (Kasa Ölçeği &amp; Takım Güç Puanı)</span>
           {glossaryOpen ? (
             <ChevronUp className="w-4 h-4 text-slate-400" />
           ) : (
@@ -434,7 +446,7 @@ export function PerformancePage({ refreshTrigger }: Props) {
           <div className="px-4 pb-4 pt-1 grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-[#1F2937]">
             <div className="p-3 rounded-xl bg-[#0B0F17] border border-[#1F2937]">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-bold text-slate-200">Kelly Birimi (1.0–5.0)</p>
+                <p className="text-xs font-bold text-slate-200">Önerilen Kasa Ağırlığı (1.0–5.0)</p>
                 <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 text-[10px] font-bold mono-nums">
                   Kasa Ölçeği
                 </span>
@@ -445,9 +457,9 @@ export function PerformancePage({ refreshTrigger }: Props) {
             </div>
             <div className="p-3 rounded-xl bg-[#0B0F17] border border-[#1F2937]">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-bold text-slate-200">ClubElo Güç Puanı</p>
+                <p className="text-xs font-bold text-slate-200">Takım Güç Puanı</p>
                 <span className="px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-400 text-[10px] font-bold mono-nums">
-                  Elo
+                  Güç
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 mt-1">
@@ -465,7 +477,7 @@ export function PerformancePage({ refreshTrigger }: Props) {
           onClick={() => setBankrollOpen((v) => !v)}
           className="w-full px-4 py-3 flex items-center justify-between text-xs font-bold text-slate-300 hover:bg-white/[0.02]"
         >
-          <span>Sanal Kasa Simülasyonu (Sabit 100 ₺)</span>
+          <span>Sabit 100 ₺ Kasa Takibi</span>
           {bankrollOpen ? (
             <ChevronUp className="w-4 h-4 text-slate-400" />
           ) : (

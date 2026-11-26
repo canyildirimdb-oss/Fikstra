@@ -319,6 +319,80 @@ def test_pe4_human_readable_notifications():
     print("TEST_PE4_HUMAN_READABLE_NOTIFICATIONS: PASS")
 
 
+def test_perf_transparency():
+    from datetime import timedelta
+    from app.routers.api import _API_CACHE
+
+    SessionLocal = _make_test_session()
+
+    def override_get_db():
+        s = SessionLocal()
+        try:
+            yield s
+        finally:
+            s.close()
+
+    _API_CACHE.clear()
+    app.dependency_overrides[get_db] = override_get_db
+    now = datetime.now(timezone.utc)
+    kickoff = now - timedelta(hours=3)
+    try:
+        with SessionLocal() as db:
+            m1 = Match(iddaa_id="tp1", league="Süper Lig", home_team="Galatasaray", away_team="Samsunspor", start_time_utc=kickoff, status="FINISHED", home_score=2, away_score=0)
+            m2 = Match(iddaa_id="tp2", league="La Liga", home_team="Real Madrid", away_team="Getafe", start_time_utc=kickoff, status="FINISHED", home_score=1, away_score=0)
+            m3 = Match(iddaa_id="tp3", league="Serie A", home_team="Inter", away_team="Verona", start_time_utc=kickoff, status="FINISHED", home_score=1, away_score=1)
+            m4 = Match(iddaa_id="tp4", league="Bundesliga", home_team="Bayern", away_team="Mainz", start_time_utc=kickoff, status="FINISHED", home_score=3, away_score=1)
+            db.add_all([m1, m2, m3, m4])
+            db.flush()
+
+            # 1) Official Analizler-published 60+ pre-kickoff pick -> MUST appear
+            p1 = Prediction(
+                match_id=m1.id, market_key="MS", selection_key="1",
+                iddaa_odd=1.55, confidence_score=76.0, is_top_pick=True,
+                published_odd=1.55, published_confidence=76.0,
+                published_at=kickoff - timedelta(hours=2),
+                status="WON", settled_at=now - timedelta(hours=1),
+            )
+            # 2) <60 confidence background pick -> MUST NOT appear
+            p2 = Prediction(
+                match_id=m2.id, market_key="MS", selection_key="1",
+                iddaa_odd=1.40, confidence_score=54.0, is_top_pick=True,
+                published_odd=1.40, published_confidence=54.0,
+                published_at=kickoff - timedelta(hours=2),
+                status="WON", settled_at=now - timedelta(hours=1),
+            )
+            # 3) Unpublished / non-top-pick background pick -> MUST NOT appear
+            p3 = Prediction(
+                match_id=m3.id, market_key="MS", selection_key="1",
+                iddaa_odd=1.60, confidence_score=72.0, is_top_pick=False,
+                status="LOST", settled_at=now - timedelta(hours=1),
+            )
+            # 4) Post-kickoff published pick -> MUST NOT appear
+            p4 = Prediction(
+                match_id=m4.id, market_key="MS", selection_key="1",
+                iddaa_odd=1.45, confidence_score=80.0, is_top_pick=True,
+                published_odd=1.45, published_confidence=80.0,
+                published_at=kickoff + timedelta(minutes=15),
+                status="WON", settled_at=now - timedelta(hours=1),
+            )
+            db.add_all([p1, p2, p3, p4])
+            db.commit()
+
+        with TestClient(app) as client:
+            perf = client.get("/api/performance").json()
+            assert perf["total_settled"] == 1, f"Expected 1 official pick, got {perf['total_settled']}"
+            assert perf["won_count"] == 1
+            assert len(perf["archive"]) == 1
+            assert perf["archive"][0]["home_team"] == "Galatasaray"
+            leagues = [x["label"] for x in perf["breakdown"]["by_league"]]
+            assert leagues == ["Süper Lig"], f"Unexpected breakdown leagues: {leagues}"
+    finally:
+        _API_CACHE.clear()
+        app.dependency_overrides.clear()
+
+    print("TEST_PERF_TRANSPARENCY: PASS")
+
+
 if __name__ == "__main__":
     p1, px, p2 = devig_1x2(2.0, 3.5, 3.8)
     assert abs((p1 + px + p2) - 1.0) < 1e-9
@@ -326,4 +400,5 @@ if __name__ == "__main__":
     test_pe2_no_fake_data_and_trap_honesty()
     test_pe3_live_survival_and_telegram_idempotent()
     test_pe4_human_readable_notifications()
+    test_perf_transparency()
     print("ALL PAKET E TESTS PASSED")

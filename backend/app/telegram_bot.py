@@ -999,7 +999,7 @@ def check_and_send_health_alerts(db: Session) -> dict[str, Any]:
         if ai_open or sync_err:
             reasons = []
             if ai_open:
-                reasons.append("Gemini AI devre kesici aktif")
+                reasons.append("Yapay zeka özeti geçici olarak duraklatıldı")
             if sync_err:
                 reasons.append(f"Son sync hata verdi ({html.escape((last_sync.message or '')[:80])})")
             candidates.append(("ai_sync", f"⚠️ AI/Sync Uyarısı: {', '.join(reasons)}."))

@@ -10,7 +10,6 @@ import {
   Plus,
   RefreshCw,
   Send,
-  Shield,
   Trash2,
 } from "lucide-react";
 import { api } from "../api/client";
@@ -164,7 +163,7 @@ export function ControlPanel({ onExit }: { onExit: () => void }) {
       const a = document.createElement("a");
       const today = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Istanbul" });
       a.href = url;
-      a.download = `fikstra_kalibrasyon_${today}.csv`;
+      a.download = `fikstra_sonuclar_${today}.csv`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -180,11 +179,13 @@ export function ControlPanel({ onExit }: { onExit: () => void }) {
         <div className="w-full max-w-sm p-6 rounded-2xl glass-card border border-emerald-500/25 space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-[#00FF85]">
-                <Shield className="w-4 h-4" />
-              </div>
+              <img
+                src="/logo-profile.png"
+                alt="Fikstra"
+                className="w-9 h-9 rounded-xl border border-emerald-500/35 object-cover shrink-0"
+              />
               <div>
-                <h1 className="text-sm font-extrabold text-white">Fikstra Kaptan Köşkü</h1>
+                <h1 className="text-sm font-extrabold text-white">Fikstra Kontrol Merkezi</h1>
                 <p className="text-[11px] text-slate-400">Yalnızca yetkili erişim</p>
               </div>
             </div>
@@ -240,9 +241,13 @@ export function ControlPanel({ onExit }: { onExit: () => void }) {
         {/* Top bar */}
         <div className="flex flex-wrap items-center justify-between gap-2 p-4 rounded-2xl glass-card">
           <div className="flex items-center gap-2.5">
-            <Shield className="w-5 h-5 text-[#00FF85]" />
+            <img
+              src="/logo-profile.png"
+              alt="Fikstra"
+              className="w-9 h-9 rounded-xl border border-emerald-500/35 object-cover shrink-0"
+            />
             <div>
-              <h1 className="text-base font-extrabold text-white">Fikstra Kaptan Köşkü</h1>
+              <h1 className="text-base font-extrabold text-white">Fikstra Kontrol Merkezi</h1>
               <p className="text-[11px] text-slate-400">0 Odds API kredili canlı sistem özeti</p>
             </div>
           </div>
@@ -293,7 +298,7 @@ export function ControlPanel({ onExit }: { onExit: () => void }) {
             </span>
           </div>
           <div className="p-3.5 rounded-2xl glass-card">
-            <span className="text-[10px] text-slate-400 block">Gemini Devre Kesici</span>
+            <span className="text-[10px] text-slate-400 block">Yapay Zeka Durumu</span>
             <span
               className={`inline-flex items-center gap-1 text-xs font-bold mt-1 ${
                 overview.gemini_circuit_open ? "text-amber-400" : "text-[#00FF85]"
@@ -301,7 +306,7 @@ export function ControlPanel({ onExit }: { onExit: () => void }) {
             >
               {overview.gemini_circuit_open ? (
                 <>
-                  <AlertTriangle className="w-3.5 h-3.5" /> Açık
+                  <AlertTriangle className="w-3.5 h-3.5" /> Duraklatıldı
                 </>
               ) : (
                 <>
@@ -311,7 +316,7 @@ export function ControlPanel({ onExit }: { onExit: () => void }) {
             </span>
           </div>
           <div className="p-3.5 rounded-2xl glass-card col-span-2 sm:col-span-1">
-            <span className="text-[10px] text-slate-400 block">Admin Telegram Alarm</span>
+            <span className="text-[10px] text-slate-400 block">Sistem Uyarıları (Telegram)</span>
             <span
               className={`text-xs font-bold block mt-1 ${
                 overview.telegram_admin_configured ? "text-[#00FF85]" : "text-slate-400"
@@ -345,7 +350,7 @@ export function ControlPanel({ onExit }: { onExit: () => void }) {
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#0B0F17] border border-emerald-500/35 text-xs font-bold text-[#00FF85] hover:bg-emerald-500/10 disabled:opacity-60"
             >
               <Download className="w-3.5 h-3.5" />
-              {csvBusy ? "İndiriliyor..." : "Kalibrasyon Verisi İndir (CSV)"}
+              {csvBusy ? "İndiriliyor..." : "Sonuç Verilerini İndir (CSV)"}
             </button>
             <button
               type="button"

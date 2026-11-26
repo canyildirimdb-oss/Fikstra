@@ -129,8 +129,8 @@ def send_push_notification(
             {
                 "title": title,
                 "body": body,
-                "icon": "/icon-192.png",
-                "badge": "/icon-192.png",
+                "icon": "/push-icon.png",
+                "badge": "/push-badge.png",
                 "url": url,
             }
         )

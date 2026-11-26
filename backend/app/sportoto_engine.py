@@ -57,11 +57,11 @@ def compute_chaos_score(p1: float, px: float, p2: float) -> dict[str, Any]:
             entropy -= p * math.log(p)
     score = round(min(100.0, max(0.0, (entropy / math.log(3.0)) * 100.0)), 1)
     if score <= 35.0:
-        label = "Demir Banko"
+        label = "Banko"
     elif score <= 70.0:
-        label = "Kırılma Maçı"
+        label = "Dengeli"
     else:
-        label = "Mayın Tarlası"
+        label = "Çok Riskli"
     return {"score": score, "label": label}
 
 

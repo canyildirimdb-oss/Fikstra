@@ -1,4 +1,5 @@
 import type { SportotoMatchItem, TotoProbs } from "../types";
+import { drawOfficialLogoMark, loadOfficialLogoMark } from "./logoLoader";
 
 export async function generateTotoPngBlob(params: {
   title: string;
@@ -9,6 +10,7 @@ export async function generateTotoPngBlob(params: {
   probs: TotoProbs;
 }): Promise<Blob> {
   const { title, matches, picksBySlot, columns, estimatedCost, probs } = params;
+  const logoImg = await loadOfficialLogoMark();
   const width = 1080;
   const rowH = 54;
   const headerH = 190;
@@ -28,14 +30,15 @@ export async function generateTotoPngBlob(params: {
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, width, height);
 
-  // Header brand
+  // Header brand with official transparent Fikstra logo
+  drawOfficialLogoMark(ctx, logoImg, 48, 34, 62);
   ctx.fillStyle = "#00FF85";
   ctx.font = "800 32px Inter, system-ui, sans-serif";
-  ctx.fillText("FİKSTRA TOTO", 48, 66);
+  ctx.fillText("FİKSTRA TOTO", 124, 64);
 
   ctx.fillStyle = "#E2E8F0";
   ctx.font = "700 22px Inter, system-ui, sans-serif";
-  ctx.fillText(title, 48, 102);
+  ctx.fillText(title, 124, 98);
 
   // Summary pills
   ctx.fillStyle = "rgba(0, 255, 133, 0.12)";

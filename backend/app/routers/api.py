@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
@@ -145,6 +145,50 @@ def _match_time_info(dt_utc: datetime) -> dict:
     }
 
 
+def _get_official_settled_predictions(
+    db: Session,
+    include_void: bool = False,
+    order_asc: bool = False,
+) -> list[Prediction]:
+    """
+    Single source of truth for Analizler-published 60+ settled predictions.
+    Excludes background/unpublished picks, <60 confidence picks, out-of-range odds,
+    and post-kickoff published picks, and deduplicates to 1 official pick per match.
+    """
+    statuses = ["WON", "LOST", "VOID"] if include_void else ["WON", "LOST"]
+    eff_conf = func.coalesce(Prediction.published_confidence, Prediction.confidence_score)
+    eff_odd = func.coalesce(Prediction.published_odd, Prediction.iddaa_odd)
+    q = (
+        db.query(Prediction)
+        .options(joinedload(Prediction.match))
+        .join(Match, Prediction.match_id == Match.id)
+        .filter(
+            Prediction.status.in_(statuses),
+            Prediction.is_top_pick.is_(True),
+            eff_conf >= 60.0,
+            eff_odd >= MIN_ODD_RULE,
+            eff_odd < MAX_HIGHLIGHT_ODD,
+            or_(
+                Prediction.published_at.is_(None),
+                Prediction.published_at < Match.start_time_utc,
+            ),
+        )
+    )
+    if order_asc:
+        q = q.order_by(Match.start_time_utc.asc(), Prediction.settled_at.asc())
+    else:
+        q = q.order_by(Prediction.settled_at.desc(), Prediction.confidence_score.desc())
+
+    seen_matches: set[int] = set()
+    out: list[Prediction] = []
+    for p in q.all():
+        if p.match_id in seen_matches or not p.match:
+            continue
+        seen_matches.add(p.match_id)
+        out.append(p)
+    return out
+
+
 @router.get("/dashboard/summary")
 def get_dashboard_summary(db: Session = Depends(get_db)):
     cached = _cache_get("dashboard_summary")
@@ -168,23 +212,7 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
         minutes_ago = max(0, int((datetime.now(timezone.utc) - fin).total_seconds() // 60))
         last_sync_iso = fin.isoformat()
 
-    settled_raw = (
-        db.query(Prediction)
-        .filter(
-            Prediction.status.in_(["WON", "LOST"]),
-            Prediction.is_top_pick.is_(True),
-            func.coalesce(Prediction.published_confidence, Prediction.confidence_score) >= 60.0,
-        )
-        .order_by(Prediction.settled_at.desc(), Prediction.confidence_score.desc())
-        .all()
-    )
-    seen_settled_matches: set[int] = set()
-    settled_preds: list[Prediction] = []
-    for p in settled_raw:
-        if p.match_id in seen_settled_matches:
-            continue
-        seen_settled_matches.add(p.match_id)
-        settled_preds.append(p)
+    settled_preds = _get_official_settled_predictions(db, include_void=False, order_asc=False)
 
     won_cnt = sum(1 for p in settled_preds if p.status == "WON")
     win_rate = round((won_cnt / len(settled_preds)) * 100.0, 1) if settled_preds else None
@@ -657,26 +685,7 @@ def get_performance(db: Session = Depends(get_db)):
     if cached is not None:
         return cached
 
-    settled_raw = (
-        db.query(Prediction)
-        .options(joinedload(Prediction.match))
-        .join(Match, Prediction.match_id == Match.id)
-        .filter(
-            Prediction.status.in_(["WON", "LOST"]),
-            Prediction.is_top_pick.is_(True),
-            func.coalesce(Prediction.published_confidence, Prediction.confidence_score) >= 60.0,
-        )
-        .order_by(Prediction.settled_at.desc(), Prediction.confidence_score.desc())
-        .all()
-    )
-    # Hard guard: at most 1 official settled row per finished match
-    seen_match_ids: set[int] = set()
-    settled: list[Prediction] = []
-    for p in settled_raw:
-        if p.match_id in seen_match_ids:
-            continue
-        seen_match_ids.add(p.match_id)
-        settled.append(p)
+    settled = _get_official_settled_predictions(db, include_void=False, order_asc=False)
     won = sum(1 for p in settled if p.status == "WON")
     total = len(settled)
     win_rate = round((won / total) * 100.0, 1) if total else None
@@ -796,25 +805,7 @@ def get_performance(db: Session = Depends(get_db)):
 
 
 def _compute_virtual_bankroll(db: Session) -> dict[str, Any]:
-    rows = (
-        db.query(Prediction)
-        .options(joinedload(Prediction.match))
-        .join(Match, Prediction.match_id == Match.id)
-        .filter(
-            Prediction.status.in_(["WON", "LOST", "VOID"]),
-            Prediction.is_top_pick.is_(True),
-            func.coalesce(Prediction.published_confidence, Prediction.confidence_score) >= 60.0,
-        )
-        .order_by(Match.start_time_utc.asc(), Prediction.settled_at.asc())
-        .all()
-    )
-    seen_matches: set[int] = set()
-    ordered: list[Prediction] = []
-    for p in rows:
-        if p.match_id in seen_matches:
-            continue
-        seen_matches.add(p.match_id)
-        ordered.append(p)
+    ordered = _get_official_settled_predictions(db, include_void=True, order_asc=True)
 
     decided_rows = [p for p in ordered if p.status in {"WON", "LOST"}]
     decided_count = len(decided_rows)
@@ -901,26 +892,11 @@ def _format_pick_short(market_key: str, selection_key: str) -> str:
 
 
 def _compute_performance_breakdown(db: Session) -> dict[str, list[dict[str, Any]]]:
-    rows = (
-        db.query(Prediction)
-        .options(joinedload(Prediction.match))
-        .join(Match, Prediction.match_id == Match.id)
-        .filter(
-            Prediction.status.in_(["WON", "LOST", "VOID"]),
-            Prediction.is_top_pick.is_(True),
-            func.coalesce(Prediction.published_confidence, Prediction.confidence_score) >= 60.0,
-        )
-        .order_by(Prediction.settled_at.desc(), Prediction.confidence_score.desc())
-        .all()
-    )
-    seen_matches: set[int] = set()
+    rows = _get_official_settled_predictions(db, include_void=True, order_asc=False)
     by_league: dict[str, dict[str, int]] = defaultdict(lambda: {"won": 0, "lost": 0, "void": 0})
     by_market: dict[str, dict[str, int]] = defaultdict(lambda: {"won": 0, "lost": 0, "void": 0})
 
     for p in rows:
-        if p.match_id in seen_matches or not p.match:
-            continue
-        seen_matches.add(p.match_id)
         lg = p.match.league or "Diğer"
         mg = _market_group_label(p.market_key)
         st = (p.status or "").upper()

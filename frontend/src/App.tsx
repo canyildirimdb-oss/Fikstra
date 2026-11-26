@@ -14,7 +14,6 @@ import {
   Link2,
   Send,
   Share2,
-  ShieldCheck,
   Ticket,
   Trash2,
   X,
@@ -535,19 +534,11 @@ export function App() {
       <header className="sticky top-0 z-30 bg-[#05080D]/80 backdrop-blur-xl border-b border-emerald-500/15">
         <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            {/* Geometric F. Logo in Neon Emerald Glowing Dark Square */}
-            <div className="w-9 h-9 rounded-xl bg-[#0B111C] border border-[#00FF85]/50 shadow-[0_0_18px_-3px_rgba(0,255,133,0.45)] flex items-center justify-center shrink-0">
-              <svg viewBox="0 0 32 32" className="w-5 h-5" fill="none">
-                <path
-                  d="M8 7H22M8 7V25M8 15.5H19"
-                  stroke="#00FF85"
-                  strokeWidth="3.4"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <circle cx="22.5" cy="23.5" r="2.3" fill="#00FF85" />
-              </svg>
-            </div>
+            <img
+              src="/logo-profile.png"
+              alt="Fikstra"
+              className="w-9 h-9 rounded-xl border border-[#00FF85]/40 shadow-[0_0_18px_-3px_rgba(0,255,133,0.4)] object-cover shrink-0"
+            />
             <div>
               <h1 className="text-base font-extrabold tracking-tight text-white leading-none">
                 Fikstra
@@ -745,11 +736,19 @@ export function App() {
             refreshTrigger={refreshTrigger}
           />
         )}
-        {tab === "performance" && <PerformancePage refreshTrigger={refreshTrigger} />}
+        {tab === "performance" && (
+          <PerformancePage
+            refreshTrigger={refreshTrigger}
+            onSelectMatch={(matchId) => setSelectedMatch({ matchId })}
+          />
+        )}
 
         {/* Subtle Transparency Footer */}
         <footer className="mt-8 pt-4 border-t border-white/[0.06] flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
-          <span>Fikstra • Veri odaklı maç analizi (18+)</span>
+          <span className="inline-flex items-center gap-2">
+            <img src="/logo-mark.png" alt="Fikstra" className="w-4 h-4 object-contain" />
+            Fikstra • Veri odaklı maç analizi (18+)
+          </span>
           <button
             type="button"
             onClick={() => setHowItWorksOpen(true)}
@@ -1083,8 +1082,8 @@ export function App() {
               className="w-full max-w-md rounded-3xl bg-[#070B12] border border-emerald-500/30 p-5 space-y-4 shadow-2xl"
             >
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="w-5 h-5 text-[#00FF85]" />
+                <div className="flex items-center gap-2.5">
+                  <img src="/logo-mark.png" alt="Fikstra" className="w-6 h-6 object-contain" />
                   <h3 className="text-sm font-extrabold text-white">Fikstra Nasıl Çalışır?</h3>
                 </div>
                 <button
@@ -1099,16 +1098,16 @@ export function App() {
 
               <div className="space-y-2.5 text-xs text-slate-300 leading-relaxed">
                 <div className="p-3 rounded-xl bg-[#0B111C] border border-white/10">
-                  <p className="font-bold text-emerald-300 mb-0.5">1. Dixon-Coles xG &amp; ClubElo</p>
-                  <p>Takımların hücum/savunma gol beklentisi, ev-deplasman katsayısı ve güncel Elo güç farkları Poisson matrisiyle modellenir.</p>
+                  <p className="font-bold text-emerald-300 mb-0.5">1. Form, Gol Gücü &amp; Kadro Analizi</p>
+                  <p>Takımların formu, gol gücü, ev-deplasman performansı ve eksik oyuncu bilgileri birlikte analiz edilir.</p>
                 </div>
                 <div className="p-3 rounded-xl bg-[#0B111C] border border-white/10">
-                  <p className="font-bold text-emerald-300 mb-0.5">2. Global De-Vig &amp; Akıllı Para</p>
-                  <p>İddaa oranları global piyasa ortalamasının marjdan arındırılmış (de-vig) gerçek olasılığı ve sert oran hareketleriyle kıyaslanır.</p>
+                  <p className="font-bold text-emerald-300 mb-0.5">2. Güncel Piyasa Oranları &amp; Oran Hareketleri</p>
+                  <p>İddaa oranları güncel piyasa oranları ve sert oran düşüşleriyle kıyaslanarak değerli seçimler öne çıkarılır.</p>
                 </div>
                 <div className="p-3 rounded-xl bg-[#0B111C] border border-white/10">
                   <p className="font-bold text-emerald-300 mb-0.5">3. Kilitli Şeffaflık (Sıfır Sahte Veri)</p>
-                  <p>Her tahmin yayınlandığı andaki oran ve güveniyle (<code className="text-emerald-300">published_*</code>) kilitlenir. Geçmişe dönük oran/sonuç değiştirilmez, uydurma veri üretilmez.</p>
+                  <p>Yayınlanan her tahmin o andaki oranıyla kilitlenir, sonradan değiştirilmez ve sahte geçmiş üretilmez.</p>
                 </div>
               </div>
 

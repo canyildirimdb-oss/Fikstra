@@ -15,7 +15,7 @@ export default defineConfig({
       manifest: {
         name: "Fikstra",
         short_name: "Fikstra",
-        description: "Dixon-Coles xG, ClubElo, global oran ve akıllı para destekli 7/24 futbol analiz platformu",
+        description: "Maç öncesi net futbol analizleri, kuponlar ve şeffaf sonuç arşivi",
         theme_color: "#090D16",
         background_color: "#090D16",
         display: "standalone",
@@ -23,22 +23,34 @@ export default defineConfig({
         start_url: "/",
         icons: [
           {
-            src: "/icon.svg",
+            src: "/logo.svg",
             sizes: "any",
             type: "image/svg+xml",
-            purpose: "any maskable",
+            purpose: "any",
           },
           {
             src: "/icon-192.png",
             sizes: "192x192",
             type: "image/png",
-            purpose: "any maskable",
+            purpose: "any",
+          },
+          {
+            src: "/icon-192.png",
+            sizes: "192x192",
+            type: "image/png",
+            purpose: "maskable",
           },
           {
             src: "/icon-512.png",
             sizes: "512x512",
             type: "image/png",
-            purpose: "any maskable",
+            purpose: "any",
+          },
+          {
+            src: "/icon-512.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "maskable",
           },
         ],
       },

@@ -510,13 +510,13 @@ export function MatchDetailDrawer({
                     </div>
                   )}
 
-                  {/* Fikstra vs. Topluluk (5 oy kilitli nabız barı) */}
+                  {/* Bu tahmine katılıyor musun? (5 oy kilitli nabız barı) */}
                   {detail.top_prediction && (
                     <div className="px-3.5 py-2.5 rounded-xl bg-[#0B0F17] border border-[#1F2937] space-y-2">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <span className="text-[11px] font-bold text-slate-300">
-                            Fikstra vs. Topluluk
+                            Bu tahmine katılıyor musun?
                           </span>
                           {pulse?.is_community_favorite && (
                             <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-[#00FF85] text-[9px] font-bold">
@@ -771,14 +771,14 @@ export function MatchDetailDrawer({
                     )}
                   </div>
 
-                  {/* 6) Collapsible Model Detayı (ClubElo, Dixon-Coles xG, Shot/Rest) */}
+                  {/* 6) Collapsible Model Detayı (Takım Güç Puanı, Gol Beklentisi, Şut/Dinlenme) */}
                   <div className="rounded-2xl bg-[#090D16] border border-[#1F2937] overflow-hidden">
                     <button
                       type="button"
                       onClick={() => setModelOpen((v) => !v)}
                       className="w-full px-4 py-3 flex items-center justify-between text-xs font-semibold text-slate-200 hover:bg-white/[0.02]"
                     >
-                      <span>Model Detayı (ClubElo, Dixon-Coles xG & Şut/Dinlenme)</span>
+                      <span>Model Detayı (Güç Puanı, Gol Beklentisi & Şut/Dinlenme)</span>
                       {modelOpen ? (
                         <ChevronUp className="w-4 h-4 text-slate-400" />
                       ) : (
@@ -795,7 +795,7 @@ export function MatchDetailDrawer({
                             <div>
                               <div className="flex justify-between text-[11px] mb-1 mono-nums">
                                 <span className="font-bold text-emerald-400">{Math.round(h)}</span>
-                                <span className="text-slate-400 font-medium">ClubElo Güç Puanı</span>
+                                <span className="text-slate-400 font-medium">Takım Güç Puanı</span>
                                 <span className="font-bold text-cyan-400">{Math.round(a)}</span>
                               </div>
                               <div className="h-2 rounded-full bg-[#131926] overflow-hidden flex">
@@ -817,7 +817,7 @@ export function MatchDetailDrawer({
                                 <div className="flex justify-between text-[11px] mb-1 mono-nums">
                                   <span className="font-bold text-emerald-400">{hx.toFixed(2)}</span>
                                   <span className="text-slate-400 font-medium">
-                                    Dixon-Coles xG Beklentisi
+                                    Beklenen Gol (xG)
                                   </span>
                                   <span className="font-bold text-cyan-400">{ax.toFixed(2)}</span>
                                 </div>
