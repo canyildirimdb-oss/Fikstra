@@ -336,7 +336,9 @@ def admin_refresh_forms(
     _verify_cron_secret(x_cron_secret)
     from services.sync import refresh_all_active_forms
 
-    res = refresh_all_active_forms(db, force_refresh=True, only_missing=False)
+    res = refresh_all_active_forms(
+        db, force_refresh=True, only_missing=False, only_with_predictions=True
+    )
     clear_api_cache()
     return res
 

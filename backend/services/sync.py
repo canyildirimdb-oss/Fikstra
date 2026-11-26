@@ -659,17 +659,22 @@ def refresh_all_active_forms(
     db: Session,
     force_refresh: bool = True,
     only_missing: bool = False,
+    only_with_predictions: bool = False,
 ) -> dict[str, Any]:
     """
-    Refresh global recent matches & form for all SCHEDULED matches using 0 Odds API credits.
-    Bounded concurrency (max_workers=6) and per-team timeout (5.5s).
+    Refresh global recent matches & form for SCHEDULED matches using 0 Odds API credits.
+    Bounded concurrency (max_workers=8) and per-team timeout (5.5s).
     """
     import time as _time
     from utils.cache import get_cached_json, set_cached_json
     from utils.team_matcher import normalize_team_name
 
     t0 = _time.monotonic()
-    scheduled = db.query(Match).filter(Match.status == "SCHEDULED").all()
+    q = db.query(Match).filter(Match.status == "SCHEDULED")
+    if only_with_predictions:
+        pred_match_ids = db.query(Prediction.match_id).distinct()
+        q = q.filter(Match.id.in_(pred_match_ids))
+    scheduled = q.all()
     if not scheduled:
         return {
             "ok": True,
