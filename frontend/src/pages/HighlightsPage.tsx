@@ -80,6 +80,8 @@ export function HighlightsPage({
   const [activeCouponsCount, setActiveCouponsCount] = useState<number>(0);
   const [communityFavIds, setCommunityFavIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
   const [slideIdx, setSlideIdx] = useState(0);
   const [tickerPaused, setTickerPaused] = useState(false);
   const prefersReducedMotion = useReducedMotion();
@@ -88,34 +90,52 @@ export function HighlightsPage({
 
   useEffect(() => {
     let cancelled = false;
-    const filterKey = `${todayOnly}|${search}`;
+    let retryTimer: number | undefined;
+    const filterKey = `${todayOnly}|${search}|${retryNonce}`;
     if (lastFilterRef.current !== filterKey) {
       setLoading(true);
+      setLoadError(false);
       lastFilterRef.current = filterKey;
     }
-    api
-      .getPredictions({
-        todayOnly,
-        majorOnly: false,
-        minOdd: 1.3,
-        minConfidence: 60,
-        search,
-      })
-      .then((res) => {
-        if (!cancelled) {
-          setItems(res.items);
-          if (todayOnly && !search.trim()) {
-            setTodayCount(res.count);
+
+    const fetchPredictions = (attempt: number) => {
+      api
+        .getPredictions({
+          todayOnly,
+          majorOnly: false,
+          minOdd: 1.3,
+          minConfidence: 60,
+          search,
+        })
+        .then((res) => {
+          if (!cancelled) {
+            setItems(res.items);
+            setLoadError(false);
+            if (todayOnly && !search.trim()) {
+              setTodayCount(res.count);
+            }
+            setLoading(false);
           }
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+        })
+        .catch(() => {
+          if (cancelled) return;
+          if (attempt === 0) {
+            retryTimer = window.setTimeout(() => {
+              if (!cancelled) fetchPredictions(1);
+            }, 1800);
+          } else {
+            setLoadError(true);
+            setLoading(false);
+          }
+        });
+    };
+
+    fetchPredictions(0);
     return () => {
       cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [todayOnly, search, refreshTrigger]);
+  }, [todayOnly, search, refreshTrigger, retryNonce]);
 
   useEffect(() => {
     let cancelled = false;
@@ -188,6 +208,8 @@ export function HighlightsPage({
         ? `Son ${perf.total_settled} tahminin ${formatTurkishPossessive(perf.won_count)} tuttu`
         : summary?.settled_total
         ? `${summary.settled_total} tahmin sonuçlandı (%${summary.overall_win_rate ?? 0})`
+        : loadError || (perf === null && summary === null)
+        ? "Veriler güncelleniyor..."
         : "İlk sonuçlar bekleniyor";
 
     const announcementSlides = announcements.map((ann) => ({
@@ -524,6 +546,26 @@ export function HighlightsPage({
           {[1, 2, 3, 4].map((n) => (
             <div key={n} className="h-36 rounded-2xl glass-card animate-pulse" />
           ))}
+        </div>
+      ) : loadError ? (
+        <div className="p-8 text-center rounded-2xl glass-card border border-amber-500/20">
+          <p className="text-sm font-semibold text-slate-100">
+            Sunucu hazırlanıyor veya bağlantı geçici olarak kesildi
+          </p>
+          <p className="text-xs text-slate-400 mt-1">
+            Veriler alınırken geçici bir sunucu hatası oluştu. Birkaç saniye sonra tekrar deneyebilirsiniz.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setLoadError(false);
+              setLoading(true);
+              setRetryNonce((n) => n + 1);
+            }}
+            className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#00FF85] text-[#05080D] text-xs font-extrabold hover:brightness-110 transition-all"
+          >
+            Tekrar Dene
+          </button>
         </div>
       ) : items.length === 0 ? (
         <div className="p-8 text-center rounded-2xl glass-card">

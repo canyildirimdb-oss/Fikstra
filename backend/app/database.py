@@ -1,4 +1,7 @@
-from sqlalchemy import create_engine, inspect, text
+import socket
+from urllib.parse import urlparse
+
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
@@ -17,6 +20,32 @@ if not is_sqlite:
     engine_kwargs["pool_timeout"] = 20
 
 engine = create_engine(db_url, **engine_kwargs)
+
+
+def _resolve_ipv4(host: str, port: int) -> str | None:
+    try:
+        infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+        if infos:
+            return str(infos[0][4][0])
+    except OSError:
+        return None
+    return None
+
+
+if not is_sqlite:
+    _parsed_db = urlparse(db_url.replace("postgresql+psycopg://", "postgresql://", 1))
+    _db_host = _parsed_db.hostname
+    _db_port = _parsed_db.port or 5432
+
+    if _db_host:
+        @event.listens_for(engine, "do_connect")
+        def _force_ipv4_connect(dialect, conn_rec, cargs, cparams):
+            target_host = cparams.get("host") or _db_host
+            target_port = int(cparams.get("port") or _db_port)
+            if target_host and "hostaddr" not in cparams:
+                ipv4 = _resolve_ipv4(str(target_host), target_port)
+                if ipv4:
+                    cparams["hostaddr"] = ipv4
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
