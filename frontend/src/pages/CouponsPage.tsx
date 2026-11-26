@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowDownToLine, Layers, Lock, Share2, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import { api } from "../api/client";
 import { CouponShareModal } from "../components/CouponShareModal";
+import { StakeCalculator } from "../components/StakeCalculator";
 import { TeamBadge } from "../components/TeamBadge";
 import type { CouponData, CustomSlipItem } from "../types";
 import type { ShareCouponPayload } from "../utils/couponShare";
@@ -9,6 +10,8 @@ import { formatMarketLabel } from "../utils/format";
 
 interface Props {
   slipItems: CustomSlipItem[];
+  stake: number;
+  onChangeStake: (next: number) => void;
   onRemoveSlipItem: (matchId: number) => void;
   onClearSlip: () => void;
   onImportSlip: (items: CustomSlipItem[]) => void;
@@ -45,6 +48,8 @@ const TIER_META: Record<
 
 export function CouponsPage({
   slipItems,
+  stake,
+  onChangeStake,
   onRemoveSlipItem,
   onClearSlip,
   onImportSlip,
@@ -199,6 +204,12 @@ export function CouponsPage({
               </div>
             ))}
           </div>
+
+          <StakeCalculator
+            totalOdd={customTotalOdd}
+            stake={stake}
+            onChangeStake={onChangeStake}
+          />
         </div>
       )}
 

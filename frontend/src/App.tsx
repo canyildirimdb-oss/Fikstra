@@ -5,9 +5,13 @@ import {
   Bell,
   BellRing,
   ChevronRight,
+  Download,
   Flame,
+  HelpCircle,
   Layers,
+  Send,
   Share2,
+  ShieldCheck,
   Ticket,
   Trash2,
   X,
@@ -16,6 +20,7 @@ import { api } from "./api/client";
 import { formatMarketLabel } from "./utils/format";
 import { CouponShareModal } from "./components/CouponShareModal";
 import { MatchDetailDrawer } from "./components/MatchDetailDrawer";
+import { StakeCalculator } from "./components/StakeCalculator";
 import type { ShareCouponPayload } from "./utils/couponShare";
 import { CouponsPage } from "./pages/CouponsPage";
 import { HighlightsPage } from "./pages/HighlightsPage";
@@ -23,6 +28,35 @@ import { PerformancePage } from "./pages/PerformancePage";
 import type { CustomSlipItem, DashboardSummary } from "./types";
 
 type TabKey = "highlights" | "coupons" | "performance";
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+}
+
+const TELEGRAM_INVITE_URL =
+  (import.meta.env.VITE_TELEGRAM_INVITE_URL as string | undefined) ||
+  "https://t.me/+yVkUre9BnAo3ZmM0";
+
+const STAKE_STORAGE_KEY = "fikstra_slip_stake";
+const PWA_DISMISS_KEY = "fikstra_pwa_dismissed";
+
+function parseInitialUrl(): { tab: TabKey; matchId: number | null } {
+  const path = window.location.pathname.toLowerCase();
+  if (path === "/bulten" || path === "/bulletin") {
+    return { tab: "highlights", matchId: null };
+  }
+  const params = new URLSearchParams(window.location.search);
+  const rawTab = params.get("tab");
+  const tab: TabKey =
+    rawTab === "coupons" || rawTab === "performance" || rawTab === "highlights"
+      ? rawTab
+      : "highlights";
+  const rawMatch = params.get("match");
+  const parsedMatch = rawMatch ? Number(rawMatch) : NaN;
+  const matchId = Number.isInteger(parsedMatch) && parsedMatch > 0 ? parsedMatch : null;
+  return { tab, matchId };
+}
 
 const TABS: { key: TabKey; label: string; icon: typeof Flame }[] = [
   { key: "highlights", label: "Öne Çıkanlar", icon: Flame },
@@ -50,12 +84,34 @@ function urlBase64ToUint8Array(base64String: string) {
 }
 
 export function App() {
-  const [tab, setTab] = useState<TabKey>("highlights");
+  const initialUrlRef = useRef(parseInitialUrl());
+  const [tab, setTab] = useState<TabKey>(initialUrlRef.current.tab);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [selectedMatch, setSelectedMatch] = useState<{
     matchId: number;
     couponPick?: { market_key: string; selection_key: string; iddaa_odd: number };
-  } | null>(null);
+  } | null>(() =>
+    initialUrlRef.current.matchId ? { matchId: initialUrlRef.current.matchId } : null
+  );
+
+  const [stake, setStake] = useState<number>(() => {
+    try {
+      const saved = Number(localStorage.getItem(STAKE_STORAGE_KEY));
+      return Number.isFinite(saved) && saved > 0 ? saved : 100;
+    } catch {
+      return 100;
+    }
+  });
+  const [howItWorksOpen, setHowItWorksOpen] = useState(false);
+  const [deferredInstallPrompt, setDeferredInstallPrompt] =
+    useState<BeforeInstallPromptEvent | null>(null);
+  const [pwaDismissed, setPwaDismissed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(PWA_DISMISS_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
 
   const [slipItems, setSlipItems] = useState<CustomSlipItem[]>(() => {
     try {
@@ -116,14 +172,44 @@ export function App() {
     }
   }, [slipItems]);
 
-  // Redirect legacy /bulten or /bulletin route to home (Öne Çıkanlar)
+  // Persist stake in localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(STAKE_STORAGE_KEY, String(stake));
+    } catch {
+      // ignore storage quota errors
+    }
+  }, [stake]);
+
+  // Capture Android/Chrome PWA install prompt
+  useEffect(() => {
+    const onBeforeInstall = (e: Event) => {
+      e.preventDefault();
+      setDeferredInstallPrompt(e as BeforeInstallPromptEvent);
+    };
+    window.addEventListener("beforeinstallprompt", onBeforeInstall);
+    return () => window.removeEventListener("beforeinstallprompt", onBeforeInstall);
+  }, []);
+
+  // Keep URL query params clean (?tab= & ?match=) without breaking drawer popstate
   useEffect(() => {
     const path = window.location.pathname.toLowerCase();
     if (path === "/bulten" || path === "/bulletin") {
-      window.history.replaceState(null, "", "/");
-      setTab("highlights");
+      window.history.replaceState(window.history.state, "", "/");
+      return;
     }
-  }, []);
+    const qs = new URLSearchParams();
+    if (tab !== "highlights") qs.set("tab", tab);
+    if (selectedMatch?.matchId) qs.set("match", String(selectedMatch.matchId));
+    const nextUrl = qs.toString() ? `/?${qs.toString()}` : "/";
+    const timer = window.setTimeout(() => {
+      const current = window.location.pathname + window.location.search;
+      if (current !== nextUrl) {
+        window.history.replaceState(window.history.state, "", nextUrl);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [tab, selectedMatch]);
 
   // Silent auto-refresh every 60s when tab is visible, and immediately on visibility/focus return
   useEffect(() => {
@@ -166,6 +252,10 @@ export function App() {
   useEffect(() => {
     loadSummary();
   }, [loadSummary, refreshTrigger]);
+
+  const handleCloseMatch = useCallback(() => {
+    setSelectedMatch(null);
+  }, []);
 
   const handleToggleSlip = useCallback(
     (item: CustomSlipItem) => {
@@ -338,8 +428,20 @@ export function App() {
             })}
           </nav>
 
-          {/* Circular Dark Glass Notification Action */}
-          <div className="flex items-center gap-2">
+          {/* Telegram Bridge + Circular Dark Glass Notification Action */}
+          <div className="flex items-center gap-2 shrink-0">
+            <a
+              href={TELEGRAM_INVITE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="h-9 w-9 sm:w-auto sm:px-3 rounded-full glass-card border-emerald-500/30 hover:border-[#00FF85]/55 text-emerald-300 hover:text-[#00FF85] flex items-center justify-center gap-1.5 text-xs font-bold transition-all"
+              title="Fikstra Telegram Grubu"
+              aria-label="Fikstra Telegram Grubu"
+            >
+              <Send className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">Telegram</span>
+            </a>
+
             <button
               onClick={handleEnablePush}
               className={`relative w-9 h-9 rounded-full glass-card flex items-center justify-center transition-all ${
@@ -362,6 +464,70 @@ export function App() {
         </div>
       </header>
 
+      {/* PWA Install / iOS Safari Hint Strip */}
+      {(() => {
+        if (pwaDismissed) return null;
+        const isStandalone =
+          typeof window !== "undefined" &&
+          (window.matchMedia?.("(display-mode: standalone)")?.matches ||
+            (window.navigator as { standalone?: boolean }).standalone === true);
+        if (isStandalone) return null;
+        const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+        const isIosSafari =
+          /iphone|ipad|ipod/i.test(ua) &&
+          /safari/i.test(ua) &&
+          !/crios|fxios|edgios/i.test(ua);
+        if (!deferredInstallPrompt && !isIosSafari) return null;
+
+        const dismissPwa = () => {
+          setPwaDismissed(true);
+          try {
+            localStorage.setItem(PWA_DISMISS_KEY, "1");
+          } catch {
+            // ignore
+          }
+        };
+
+        return (
+          <div className="max-w-5xl mx-auto px-4 pt-3">
+            <div className="px-3.5 py-2 rounded-xl glass-card border-emerald-500/25 flex items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2 min-w-0">
+                <Download className="w-3.5 h-3.5 text-[#00FF85] shrink-0" />
+                <span className="text-slate-200 truncate">
+                  {deferredInstallPrompt
+                    ? "Fikstra'yı ana ekranına uygulama olarak kur"
+                    : "iPhone'da uygulama gibi kullan: Paylaş → Ana Ekrana Ekle"}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {deferredInstallPrompt && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await deferredInstallPrompt.prompt();
+                      const res = await deferredInstallPrompt.userChoice;
+                      if (res.outcome === "accepted") dismissPwa();
+                      setDeferredInstallPrompt(null);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-[#00FF85] text-[#05080D] text-[11px] font-extrabold"
+                  >
+                    Uygulama olarak kur
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={dismissPwa}
+                  className="p-1 text-slate-400 hover:text-white"
+                  aria-label="İpucunu kapat"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {pushMsg && (
         <div className="max-w-5xl mx-auto px-4 pt-3">
           <div className="px-3.5 py-2 rounded-xl bg-cyan-500/15 border border-cyan-500/30 text-xs text-cyan-300">
@@ -377,6 +543,9 @@ export function App() {
             summary={summary}
             onSelectMatch={(id) => setSelectedMatch({ matchId: id })}
             onGoPerformance={() => setTab("performance")}
+            onGoCoupons={() => setTab("coupons")}
+            onOpenHowItWorks={() => setHowItWorksOpen(true)}
+            telegramInviteUrl={TELEGRAM_INVITE_URL}
             slipItems={slipItems}
             onToggleSlip={handleToggleSlip}
             refreshTrigger={refreshTrigger}
@@ -385,6 +554,8 @@ export function App() {
         {tab === "coupons" && (
           <CouponsPage
             slipItems={slipItems}
+            stake={stake}
+            onChangeStake={setStake}
             onRemoveSlipItem={handleRemoveSlipItem}
             onClearSlip={handleClearSlip}
             onImportSlip={handleImportSlip}
@@ -393,6 +564,19 @@ export function App() {
           />
         )}
         {tab === "performance" && <PerformancePage refreshTrigger={refreshTrigger} />}
+
+        {/* Subtle Transparency Footer */}
+        <footer className="mt-8 pt-4 border-t border-white/[0.06] flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+          <span>Fikstra • Veri odaklı maç analizi (18+)</span>
+          <button
+            type="button"
+            onClick={() => setHowItWorksOpen(true)}
+            className="inline-flex items-center gap-1 text-slate-400 hover:text-[#00FF85] font-semibold transition-colors"
+          >
+            <HelpCircle className="w-3.5 h-3.5" />
+            Nasıl Çalışır?
+          </button>
+        </footer>
       </main>
 
       {/* Undo Toast */}
@@ -426,39 +610,47 @@ export function App() {
       {/* Desktop Floating Kuponum Fişi Bar (when not on Coupons tab) */}
       {slipItems.length > 0 && tab !== "coupons" && (
         <div className="hidden md:block fixed bottom-4 inset-x-0 z-30 px-4 pointer-events-none">
-          <div className="max-w-3xl mx-auto pointer-events-auto p-3 rounded-2xl bg-[#080E18]/95 backdrop-blur-xl border border-[#00FF85]/45 shadow-2xl shadow-[#00FF85]/15 flex items-center justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 text-xs font-bold text-[#00FF85]">
-                <Ticket className="w-3.5 h-3.5 shrink-0" />
-                <span>Kuponum Fişi ({slipItems.length} Maç)</span>
-                <span className="mono-nums px-2 py-0.5 rounded-md bg-[#00FF85]/20 text-[#00FF85]">
-                  {customTotalOdd.toFixed(2)} Oran
-                </span>
+          <div className="max-w-3xl mx-auto pointer-events-auto p-3 rounded-2xl bg-[#080E18]/95 backdrop-blur-xl border border-[#00FF85]/45 shadow-2xl shadow-[#00FF85]/15 space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 text-xs font-bold text-[#00FF85]">
+                  <Ticket className="w-3.5 h-3.5 shrink-0" />
+                  <span>Kuponum Fişi ({slipItems.length} Maç)</span>
+                  <span className="mono-nums px-2 py-0.5 rounded-md bg-[#00FF85]/20 text-[#00FF85]">
+                    {customTotalOdd.toFixed(2)} Oran
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 truncate mt-0.5">
+                  {slipItems
+                    .map(
+                      (s) =>
+                        `${s.home_team}-${s.away_team} (${formatMarketLabel(s.market_key, s.selection_key)} @${s.iddaa_odd.toFixed(2)})`
+                    )
+                    .join(" • ")}
+                </p>
               </div>
-              <p className="text-[11px] text-slate-300 truncate mt-0.5">
-                {slipItems
-                  .map(
-                    (s) =>
-                      `${s.home_team}-${s.away_team} (${formatMarketLabel(s.market_key, s.selection_key)} @${s.iddaa_odd.toFixed(2)})`
-                  )
-                  .join(" • ")}
-              </p>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={openSlipShare}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#00FF85] hover:bg-emerald-400 text-[#05080D] text-xs font-bold"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
+                  Kuponu Paylaş
+                </button>
+                <button
+                  onClick={() => setTab("coupons")}
+                  className="px-2.5 py-1.5 rounded-xl glass-card text-xs font-semibold text-slate-200 hover:border-[#00FF85]/45"
+                >
+                  Fişi Aç
+                </button>
+              </div>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                onClick={openSlipShare}
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#00FF85] hover:bg-emerald-400 text-[#05080D] text-xs font-bold"
-              >
-                <Share2 className="w-3.5 h-3.5" />
-                Kuponu Paylaş
-              </button>
-              <button
-                onClick={() => setTab("coupons")}
-                className="px-2.5 py-1.5 rounded-xl glass-card text-xs font-semibold text-slate-200 hover:border-[#00FF85]/45"
-              >
-                Fişi Aç
-              </button>
-            </div>
+            <StakeCalculator
+              totalOdd={customTotalOdd}
+              stake={stake}
+              onChangeStake={setStake}
+              compact
+            />
           </div>
         </div>
       )}
@@ -549,6 +741,12 @@ export function App() {
                 ))}
               </div>
 
+              <StakeCalculator
+                totalOdd={customTotalOdd}
+                stake={stake}
+                onChangeStake={setStake}
+              />
+
               <div className="flex items-center gap-2 pt-2">
                 <button
                   type="button"
@@ -611,11 +809,66 @@ export function App() {
       <MatchDetailDrawer
         matchId={selectedMatch?.matchId ?? null}
         couponPick={selectedMatch?.couponPick}
-        onClose={() => setSelectedMatch(null)}
+        onClose={handleCloseMatch}
         slipItems={slipItems}
         onToggleSlip={handleToggleSlip}
       />
       <CouponShareModal payload={slipSharePayload} onClose={() => setSlipSharePayload(null)} />
+
+      {/* Fikstra Nasıl Çalışır? Transparency Modal */}
+      <AnimatePresence>
+        {howItWorksOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setHowItWorksOpen(false)}
+            className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.96, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md rounded-3xl bg-[#070B12] border border-emerald-500/30 p-5 space-y-4 shadow-2xl"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-[#00FF85]" />
+                  <h3 className="text-sm font-extrabold text-white">Fikstra Nasıl Çalışır?</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setHowItWorksOpen(false)}
+                  className="p-1.5 rounded-xl bg-[#0B0F17] border border-[#1F2937] text-slate-400 hover:text-white"
+                  aria-label="Kapat"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-2.5 text-xs text-slate-300 leading-relaxed">
+                <div className="p-3 rounded-xl bg-[#0B111C] border border-white/10">
+                  <p className="font-bold text-emerald-300 mb-0.5">1. Dixon-Coles xG &amp; ClubElo</p>
+                  <p>Takımların hücum/savunma gol beklentisi, ev-deplasman katsayısı ve güncel Elo güç farkları Poisson matrisiyle modellenir.</p>
+                </div>
+                <div className="p-3 rounded-xl bg-[#0B111C] border border-white/10">
+                  <p className="font-bold text-emerald-300 mb-0.5">2. Global De-Vig &amp; Akıllı Para</p>
+                  <p>İddaa oranları global piyasa ortalamasının marjdan arındırılmış (de-vig) gerçek olasılığı ve sert oran hareketleriyle kıyaslanır.</p>
+                </div>
+                <div className="p-3 rounded-xl bg-[#0B111C] border border-white/10">
+                  <p className="font-bold text-emerald-300 mb-0.5">3. Kilitli Şeffaflık (Sıfır Sahte Veri)</p>
+                  <p>Her tahmin yayınlandığı andaki oran ve güveniyle (<code className="text-emerald-300">published_*</code>) kilitlenir. Geçmişe dönük oran/sonuç değiştirilmez, uydurma veri üretilmez.</p>
+                </div>
+              </div>
+
+              <p className="text-[11px] text-slate-500 text-center">
+                İstatistiksel tahmindir, kesin kazanç garantisi vermez • 18+
+              </p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

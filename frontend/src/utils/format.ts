@@ -106,3 +106,22 @@ export function getTeamMonogram(name: string) {
   const palette = BADGE_PALETTES[Math.abs(hash) % BADGE_PALETTES.length];
   return { initials, palette };
 }
+
+export function formatTurkishPossessive(n: number): string {
+  const abs = Math.abs(Math.trunc(n));
+  const last = abs % 10;
+  if (last === 1) return `${n}'i`;
+  if (last === 2) return `${n}'si`;
+  if (last === 3 || last === 4) return `${n}'ü`;
+  if (last === 5 || last === 8) return `${n}'i`;
+  if (last === 6) return `${n}'sı`;
+  if (last === 7) return `${n}'si`;
+  if (last === 9) return `${n}'u`;
+  if (abs === 0) return `${n}'ı`;
+  const lastTwo = abs % 100;
+  if (lastTwo === 10 || lastTwo === 30) return `${n}'u`;
+  if (lastTwo === 20 || lastTwo === 50) return `${n}'si`;
+  if (lastTwo === 40 || lastTwo === 60 || lastTwo === 90) return `${n}'ı`;
+  if (lastTwo === 70 || lastTwo === 80) return `${n}'i`;
+  return `${n}'ü`;
+}

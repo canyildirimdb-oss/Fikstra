@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { motion } from "framer-motion";
-import { ArrowRight, Check, Flame, Plus, Search, X, Zap } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { ArrowRight, Check, Flame, Plus, Search, Send, ShieldCheck, X, Zap } from "lucide-react";
 import { api } from "../api/client";
 import type {
   CustomSlipItem,
@@ -8,7 +8,7 @@ import type {
   PerformanceData,
   PredictionItem,
 } from "../types";
-import { formatMarketLabel, formatPickWithTeam } from "../utils/format";
+import { formatMarketLabel, formatPickWithTeam, formatTurkishPossessive } from "../utils/format";
 import { ConfidenceRing } from "../components/ConfidenceRing";
 import { FormStrip, LeagueBadge, TeamBadge } from "../components/TeamBadge";
 
@@ -16,6 +16,9 @@ interface Props {
   summary: DashboardSummary | null;
   onSelectMatch: (matchId: number) => void;
   onGoPerformance: () => void;
+  onGoCoupons: () => void;
+  onOpenHowItWorks: () => void;
+  telegramInviteUrl: string;
   slipItems: CustomSlipItem[];
   onToggleSlip: (item: CustomSlipItem) => void;
   refreshTrigger: number;
@@ -57,6 +60,9 @@ export function HighlightsPage({
   summary,
   onSelectMatch,
   onGoPerformance,
+  onGoCoupons,
+  onOpenHowItWorks,
+  telegramInviteUrl,
   slipItems,
   onToggleSlip,
   refreshTrigger,
@@ -68,6 +74,9 @@ export function HighlightsPage({
   const [todayCount, setTodayCount] = useState<number | null>(null);
   const [perf, setPerf] = useState<PerformanceData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [slideIdx, setSlideIdx] = useState(0);
+  const [tickerPaused, setTickerPaused] = useState(false);
+  const prefersReducedMotion = useReducedMotion();
   const lastFilterRef = useRef<string>("");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -135,6 +144,66 @@ export function HighlightsPage({
   }, [items, summary?.top_confidence]);
 
   const heroReasons = useMemo(() => (heroItem ? getTopReasonChips(heroItem) : []), [heroItem]);
+
+  const slides = useMemo(() => {
+    const analyzedToday = todayCount ?? summary?.active_matches_count ?? null;
+    const trustLabel =
+      perf && perf.total_settled > 0
+        ? `Son ${perf.total_settled} tahminin ${formatTurkishPossessive(perf.won_count)} tuttu`
+        : summary?.settled_total
+        ? `${summary.settled_total} tahmin sonuçlandı (%${summary.overall_win_rate ?? 0})`
+        : "İlk sonuçlar bekleniyor";
+
+    return [
+      {
+        key: "trust",
+        icon: "dots" as const,
+        text: trustLabel,
+        onClick: onGoPerformance,
+      },
+      {
+        key: "telegram",
+        icon: "telegram" as const,
+        text: "Fikstra Telegram Terminali yayında · Anlık kupon, tekli ve günlük karne",
+        onClick: () => window.open(telegramInviteUrl, "_blank", "noopener,noreferrer"),
+      },
+      {
+        key: "coupons",
+        icon: "zap" as const,
+        text:
+          analyzedToday !== null
+            ? `Bugün ${analyzedToday} maç analiz edildi · Günün hazır kuponlarına göz at`
+            : "Günün analizleri ve hazır kuponlarına göz at",
+        onClick: onGoCoupons,
+      },
+      {
+        key: "transparency",
+        icon: "shield" as const,
+        text: "Tüm tahminler oranıyla kilitlenir · Sahte geçmiş üretilmez",
+        onClick: onOpenHowItWorks,
+      },
+    ];
+  }, [
+    perf,
+    summary?.settled_total,
+    summary?.overall_win_rate,
+    summary?.active_matches_count,
+    todayCount,
+    onGoPerformance,
+    onGoCoupons,
+    onOpenHowItWorks,
+    telegramInviteUrl,
+  ]);
+
+  useEffect(() => {
+    if (tickerPaused) return;
+    const id = window.setInterval(() => {
+      setSlideIdx((prev) => (prev + 1) % slides.length);
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [tickerPaused, slides.length]);
+
+  const activeSlide = slides[slideIdx % slides.length];
 
   return (
     <div className="space-y-3.5">
@@ -234,35 +303,75 @@ export function HighlightsPage({
         </button>
       )}
 
-      {/* Single-Line Clickable Trust Strip */}
-      <button
-        type="button"
-        onClick={onGoPerformance}
+      {/* Animated Rotating Info & Trust Strip */}
+      <div
+        onMouseEnter={() => setTickerPaused(true)}
+        onMouseLeave={() => setTickerPaused(false)}
+        onTouchStart={() => setTickerPaused(true)}
+        onTouchEnd={() => setTickerPaused(false)}
         className="w-full px-3.5 py-2.5 rounded-xl glass-card hover:border-[#00FF85]/40 transition-colors flex items-center justify-between gap-2 text-xs"
       >
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-slate-200 font-semibold truncate">
-            {perf && perf.total_settled > 0
-              ? `Son ${perf.total_settled} tahminin ${perf.won_count}'i tuttu`
-              : summary?.settled_total
-              ? `${summary.settled_total} tahmin sonuçlandı (%${summary.overall_win_rate ?? 0})`
-              : "İlk sonuçlar bekleniyor"}
-          </span>
-          {perf && perf.archive.length > 0 && (
-            <span className="hidden xs:inline-flex items-center gap-1 shrink-0">
-              {perf.archive.slice(0, 8).map((r) => (
-                <span
-                  key={r.prediction_id}
-                  className={`w-2 h-2 rounded-full ${
-                    r.status === "WON" ? "bg-[#00FF85]" : "bg-rose-500/80"
-                  }`}
-                />
-              ))}
-            </span>
-          )}
+        <button
+          type="button"
+          onClick={activeSlide.onClick}
+          className="flex-1 min-w-0 flex items-center gap-2 text-left overflow-hidden"
+        >
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={activeSlide.key}
+              initial={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 6 }}
+              animate={prefersReducedMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+              exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: -6 }}
+              transition={{ duration: prefersReducedMotion ? 0.12 : 0.22 }}
+              className="flex items-center gap-2 min-w-0 w-full"
+            >
+              {activeSlide.icon === "telegram" && (
+                <Send className="w-3.5 h-3.5 text-[#00FF85] shrink-0" />
+              )}
+              {activeSlide.icon === "zap" && (
+                <Zap className="w-3.5 h-3.5 text-[#00FF85] shrink-0" />
+              )}
+              {activeSlide.icon === "shield" && (
+                <ShieldCheck className="w-3.5 h-3.5 text-[#00FF85] shrink-0" />
+              )}
+              <span className="text-slate-200 font-semibold truncate">{activeSlide.text}</span>
+              {activeSlide.icon === "dots" && perf && perf.archive.length > 0 && (
+                <span className="hidden xs:inline-flex items-center gap-1 shrink-0">
+                  {perf.archive.slice(0, 8).map((r) => (
+                    <span
+                      key={r.prediction_id}
+                      className={`w-2 h-2 rounded-full ${
+                        r.status === "WON" ? "bg-[#00FF85]" : "bg-rose-500/80"
+                      }`}
+                    />
+                  ))}
+                </span>
+              )}
+              <ArrowRight className="w-3.5 h-3.5 text-[#00FF85] shrink-0 ml-auto" />
+            </motion.div>
+          </AnimatePresence>
+        </button>
+
+        {/* Clickable Slide Indicator Dots */}
+        <div className="flex items-center gap-1 shrink-0 pl-1.5 border-l border-white/10">
+          {slides.map((s, idx) => (
+            <button
+              key={s.key}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setSlideIdx(idx);
+              }}
+              aria-label={`Duyuru ${idx + 1}`}
+              className={`h-1.5 rounded-full transition-all ${
+                idx === slideIdx % slides.length
+                  ? "w-3.5 bg-[#00FF85]"
+                  : "w-1.5 bg-white/20 hover:bg-white/40"
+              }`}
+            />
+          ))}
         </div>
-        <ArrowRight className="w-3.5 h-3.5 text-[#00FF85] shrink-0" />
-      </button>
+      </div>
 
       {/* Sticky Filter Row: Bugün · N / Tümü + Expandable 🔍 */}
       <div className="sticky top-16 z-20 -mx-4 px-4 py-2.5 bg-[#05080D]/90 backdrop-blur-xl border-b border-white/[0.05]">

@@ -1,12 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertTriangle,
   Check,
   ChevronDown,
   ChevronUp,
+  Copy,
+  Download,
   Plus,
   RefreshCw,
+  Share2,
   Sparkles,
   TrendingDown,
   X,
@@ -22,6 +25,7 @@ import {
 import { api } from "../api/client";
 import type { CustomSlipItem, MatchDetail } from "../types";
 import { formatMarketLabel, formatPickWithTeam } from "../utils/format";
+import { generateMatchSharePng } from "../utils/matchShare";
 import { ConfidenceRing } from "./ConfidenceRing";
 import { FormStrip, LeagueBadge, TeamBadge } from "./TeamBadge";
 
@@ -103,6 +107,20 @@ export function MatchDetailDrawer({
   const [injuriesOpen, setInjuriesOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const [oddsOpen, setOddsOpen] = useState(false);
+  const [shareSheetOpen, setShareSheetOpen] = useState(false);
+  const [sharePreview, setSharePreview] = useState<{
+    dataUrl: string;
+    blob: Blob;
+    filename: string;
+  } | null>(null);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareStatus, setShareStatus] = useState<string | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   // Lock body scroll & support Android back button via history.pushState / popstate
   useEffect(() => {
@@ -116,7 +134,7 @@ export function MatchDetailDrawer({
 
     const onPopState = () => {
       closedByPop = true;
-      onClose();
+      onCloseRef.current();
     };
     window.addEventListener("popstate", onPopState);
 
@@ -127,7 +145,7 @@ export function MatchDetailDrawer({
         window.history.back();
       }
     };
-  }, [matchId, onClose]);
+  }, [matchId]);
 
   useEffect(() => {
     if (!matchId) {
@@ -138,6 +156,10 @@ export function MatchDetailDrawer({
     setInjuriesOpen(false);
     setModelOpen(false);
     setOddsOpen(false);
+    setShareSheetOpen(false);
+    setSharePreview(null);
+    setShareStatus(null);
+    setLinkCopied(false);
     let cancelled = false;
     setLoading(true);
     api
@@ -221,6 +243,90 @@ export function MatchDetailDrawer({
         (couponPick && couponPick.market_key === mk && couponPick.selection_key === sk)
     );
 
+  const openShareSheet = async () => {
+    if (!detail || !activePick) return;
+    setShareSheetOpen(true);
+    setShareStatus(null);
+    setLinkCopied(false);
+    setShareLoading(true);
+    try {
+      const res = await generateMatchSharePng({
+        matchId: detail.match_id,
+        league: detail.league,
+        startDateTr: detail.start_date_tr,
+        startTimeTr: detail.start_time_tr,
+        homeTeam: detail.home_team,
+        awayTeam: detail.away_team,
+        homeLogoUrl: detail.home_logo_url,
+        awayLogoUrl: detail.away_logo_url,
+        marketKey: activePick.market_key,
+        selectionKey: activePick.selection_key,
+        iddaaOdd: activePick.iddaa_odd,
+        confidenceScore: detail.top_prediction?.confidence_score ?? 70,
+        valueEdgePct: detail.top_prediction?.value_edge_pct ?? null,
+        oddsDropPct: detail.top_prediction?.odds_drop_pct ?? null,
+        breakdown: detail.top_prediction?.breakdown ?? null,
+      });
+      setSharePreview(res);
+    } catch {
+      setShareStatus("Görsel oluşturulurken bir hata oluştu.");
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const handleDownloadMatchPng = () => {
+    if (!sharePreview) return;
+    const a = document.createElement("a");
+    a.href = sharePreview.dataUrl;
+    a.download = sharePreview.filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setShareStatus("PNG görseli indirildi.");
+  };
+
+  const handleNativeShareMatch = async () => {
+    if (!sharePreview || !detail) return;
+    const file = new File([sharePreview.blob], sharePreview.filename, { type: "image/png" });
+    const matchUrl = `${window.location.origin}/?match=${detail.match_id}`;
+    if (navigator.share && navigator.canShare?.({ files: [file] })) {
+      try {
+        await navigator.share({
+          files: [file],
+          title: `Fikstra • ${detail.home_team} - ${detail.away_team}`,
+          text: `${detail.home_team} - ${detail.away_team} analiz kartı`,
+          url: matchUrl,
+        });
+        return;
+      } catch (err) {
+        if ((err as Error)?.name === "AbortError") return;
+      }
+    }
+    try {
+      if (navigator.clipboard && typeof ClipboardItem !== "undefined") {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": sharePreview.blob })]);
+        setShareStatus("Görsel panoya kopyalandı.");
+        return;
+      }
+    } catch {
+      // fall back to download
+    }
+    handleDownloadMatchPng();
+  };
+
+  const handleCopyMatchLink = async () => {
+    if (!detail) return;
+    const matchUrl = `${window.location.origin}/?match=${detail.match_id}`;
+    try {
+      await navigator.clipboard.writeText(matchUrl);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      setShareStatus(matchUrl);
+    }
+  };
+
   const auRows = (["AU_15", "AU_25", "AU_35"] as const)
     .map((mk) => ({
       mk,
@@ -241,7 +347,7 @@ export function MatchDetailDrawer({
           onClick={onClose}
         >
           <motion.div
-            className="w-full md:max-w-2xl max-h-[92vh] flex flex-col rounded-t-3xl md:rounded-2xl bg-[#070B12]/98 backdrop-blur-2xl border border-emerald-500/25 shadow-[0_0_40px_-10px_rgba(0,255,133,0.22)] overflow-hidden"
+            className="relative w-full md:max-w-2xl max-h-[92vh] flex flex-col rounded-t-3xl md:rounded-2xl bg-[#070B12]/98 backdrop-blur-2xl border border-emerald-500/25 shadow-[0_0_40px_-10px_rgba(0,255,133,0.22)] overflow-hidden"
             initial={{ y: 48, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 48, opacity: 0 }}
@@ -912,40 +1018,143 @@ export function MatchDetailDrawer({
             </div>
 
             {/* Sticky Bottom Action Bar */}
-            {detail && activePick && onToggleSlip && (
-              <div className="shrink-0 px-5 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] bg-[#070B12]/98 border-t border-emerald-500/20">
+            {detail && activePick && (
+              <div className="shrink-0 px-5 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] bg-[#070B12]/98 border-t border-emerald-500/20 flex items-center gap-2">
+                {onToggleSlip && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onToggleSlip({
+                        match_id: detail.match_id,
+                        home_team: detail.home_team,
+                        away_team: detail.away_team,
+                        market_key: activePick.market_key,
+                        selection_key: activePick.selection_key,
+                        iddaa_odd: activePick.iddaa_odd,
+                      })
+                    }
+                    className={`flex-1 py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition-all mono-nums ${
+                      inSlip
+                        ? "bg-emerald-500/15 border border-[#00FF85]/50 text-[#00FF85]"
+                        : "bg-[#00FF85] hover:bg-emerald-400 text-[#05080D] shadow-[0_0_18px_-4px_rgba(0,255,133,0.65)]"
+                    }`}
+                  >
+                    {inSlip ? (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>Kuponda ✓ · Çıkar</span>
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-4 h-4" />
+                        <span>Kupona Ekle · {activePick.iddaa_odd.toFixed(2)}</span>
+                      </>
+                    )}
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={() =>
-                    onToggleSlip({
-                      match_id: detail.match_id,
-                      home_team: detail.home_team,
-                      away_team: detail.away_team,
-                      market_key: activePick.market_key,
-                      selection_key: activePick.selection_key,
-                      iddaa_odd: activePick.iddaa_odd,
-                    })
-                  }
-                  className={`w-full py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition-all mono-nums ${
-                    inSlip
-                      ? "bg-emerald-500/15 border border-[#00FF85]/50 text-[#00FF85]"
-                      : "bg-[#00FF85] hover:bg-emerald-400 text-[#05080D] shadow-[0_0_18px_-4px_rgba(0,255,133,0.65)]"
-                  }`}
+                  onClick={openShareSheet}
+                  className="w-11 h-11 rounded-xl bg-[#0B111C] border border-white/15 hover:border-[#00FF85]/50 text-slate-200 hover:text-[#00FF85] flex items-center justify-center shrink-0 transition-colors"
+                  aria-label="Maç Kartını Paylaş"
+                  title="Maç Kartını Paylaş"
                 >
-                  {inSlip ? (
-                    <>
-                      <Check className="w-4 h-4" />
-                      <span>Kuponda ✓ · Çıkar</span>
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="w-4 h-4" />
-                      <span>Kupona Ekle · {activePick.iddaa_odd.toFixed(2)}</span>
-                    </>
-                  )}
+                  <Share2 className="w-4 h-4" />
                 </button>
               </div>
             )}
+
+            {/* Match Share Action Sheet Overlay */}
+            <AnimatePresence>
+              {shareSheetOpen && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setShareSheetOpen(false)}
+                  className="absolute inset-0 z-20 bg-black/75 backdrop-blur-sm flex items-end justify-center p-3"
+                >
+                  <motion.div
+                    initial={{ y: 40, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    exit={{ y: 40, opacity: 0 }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-full rounded-2xl bg-[#0B111C] border border-emerald-500/30 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] space-y-3 shadow-2xl"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-extrabold text-white">Maç Analiz Kartını Paylaş</span>
+                      <button
+                        type="button"
+                        onClick={() => setShareSheetOpen(false)}
+                        className="p-1.5 rounded-lg bg-[#070B12] border border-white/10 text-slate-400 hover:text-white"
+                        aria-label="Paylaşımı kapat"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="rounded-xl overflow-hidden bg-[#05080D] border border-white/10 flex items-center justify-center min-h-[180px] max-h-[260px]">
+                      {shareLoading ? (
+                        <span className="text-xs text-slate-400">Analiz kartı hazırlanıyor...</span>
+                      ) : sharePreview ? (
+                        <img
+                          src={sharePreview.dataUrl}
+                          alt="Fikstra Maç Analiz Kartı"
+                          className="w-48 h-48 object-contain"
+                        />
+                      ) : (
+                        <span className="text-xs text-rose-400">Önizleme oluşturulamadı.</span>
+                      )}
+                    </div>
+
+                    {shareStatus && (
+                      <p className="text-[11px] text-emerald-400 text-center font-medium">
+                        {shareStatus}
+                      </p>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={handleNativeShareMatch}
+                        disabled={!sharePreview}
+                        className="py-2.5 px-3 rounded-xl bg-[#00FF85] hover:bg-emerald-400 text-[#05080D] text-xs font-extrabold inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
+                      >
+                        <Share2 className="w-3.5 h-3.5" />
+                        Görseli Paylaş
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDownloadMatchPng}
+                        disabled={!sharePreview}
+                        className="py-2.5 px-3 rounded-xl bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 text-xs font-bold inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        PNG İndir
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleCopyMatchLink}
+                      className="w-full py-2.5 px-3 rounded-xl bg-[#070B12] border border-white/15 hover:border-[#00FF85]/45 text-xs font-semibold text-slate-200 inline-flex items-center justify-center gap-1.5"
+                    >
+                      {linkCopied ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-[#00FF85]" />
+                          <span className="text-[#00FF85]">Maç Linki Kopyalandı</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Maç Linkini Kopyala (?match={detail?.match_id})</span>
+                        </>
+                      )}
+                    </button>
+                  </motion.div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </motion.div>
         </motion.div>
       )}
