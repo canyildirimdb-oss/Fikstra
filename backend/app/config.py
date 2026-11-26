@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     telegram_topic_singles: str = ""
     telegram_topic_value: str = ""
     telegram_topic_results: str = ""
+    telegram_topic_chat: str = ""
     telegram_single_min_conf: float = 70.0
     telegram_single_daily_cap: int = 6
     telegram_value_daily_cap: int = 4

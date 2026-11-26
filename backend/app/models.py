@@ -266,3 +266,28 @@ class SiteAnnouncement(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class MatchPulseVote(Base):
+    __tablename__ = "match_pulse_votes"
+    __table_args__ = (
+        UniqueConstraint("prediction_id", "voter_hash", name="uq_pulse_vote_pred_voter"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    prediction_id: Mapped[int] = mapped_column(ForeignKey("predictions.id", ondelete="CASCADE"), index=True)
+    voter_hash: Mapped[str] = mapped_column(String(64))
+    choice: Mapped[str] = mapped_column(String(16))  # agree | risky
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class MatchSlipAdd(Base):
+    __tablename__ = "match_slip_adds"
+    __table_args__ = (
+        UniqueConstraint("prediction_id", "client_hash", name="uq_slip_add_pred_client"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    prediction_id: Mapped[int] = mapped_column(ForeignKey("predictions.id", ondelete="CASCADE"), index=True)
+    client_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

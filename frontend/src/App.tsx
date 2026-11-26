@@ -10,6 +10,7 @@ import {
   Flame,
   HelpCircle,
   Layers,
+  Link2,
   Send,
   Share2,
   ShieldCheck,
@@ -184,6 +185,64 @@ export function App() {
     });
   }, [showToast]);
 
+  // Hydrate shared slip from ?slip=12,45,89
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const rawSlip = params.get("slip");
+    if (!rawSlip) return;
+    const ids = rawSlip
+      .split(",")
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isInteger(n) && n > 0)
+      .slice(0, 30);
+
+    // Clean ?slip= from URL immediately
+    params.delete("slip");
+    const nextSearch = params.toString();
+    const nextUrl = nextSearch ? `${window.location.pathname}?${nextSearch}` : window.location.pathname;
+    window.history.replaceState(window.history.state, "", nextUrl);
+
+    if (ids.length === 0) return;
+
+    api
+      .getPredictionStatuses(ids)
+      .then((res) => {
+        const nowMs = Date.now();
+        const validItems: CustomSlipItem[] = [];
+        let skipped = 0;
+        for (const it of res.items) {
+          const kickoffMs = it.kickoff ? Date.parse(it.kickoff) : NaN;
+          const started = !Number.isNaN(kickoffMs) && kickoffMs <= nowMs;
+          if (it.status !== "PENDING" || started) {
+            skipped += 1;
+            continue;
+          }
+          validItems.push({
+            match_id: it.id,
+            prediction_id: it.id,
+            home_team: it.home_team,
+            away_team: it.away_team,
+            market_key: it.market_key,
+            selection_key: it.selection_key,
+            iddaa_odd: it.odd,
+            start_time_utc: it.kickoff || undefined,
+          });
+        }
+        if (validItems.length > 0) {
+          setSlipItems(validItems);
+          setTab("coupons");
+          showToast(
+            skipped > 0
+              ? `${validItems.length} maç kuponuna yüklendi (${skipped} başlamış maç atlandı)`
+              : `${validItems.length} maç kuponuna yüklendi`
+          );
+        } else {
+          showToast("Paylaşılan kupondaki maçlar başlamış veya bulunamadı");
+        }
+      })
+      .catch(() => {});
+  }, [showToast]);
+
   // Persist slipItems per TR day
   useEffect(() => {
     try {
@@ -287,12 +346,32 @@ export function App() {
           showToast(`${item.home_team} kupondan çıkarıldı`, prev);
           return prev.filter((x) => x.match_id !== item.match_id);
         }
+        if (item.prediction_id) {
+          api.recordSlipAdd(item.prediction_id).catch(() => {});
+        }
         showToast(`${item.home_team} kupona eklendi`, prev);
         return [...prev, item];
       });
     },
     [showToast]
   );
+
+  const handleCopySlipLink = useCallback(async () => {
+    const ids = slipItems
+      .map((s) => s.prediction_id)
+      .filter((id): id is number => typeof id === "number" && id > 0);
+    if (ids.length === 0) {
+      showToast("Link oluşturmak için en az 1 maç ekleyin");
+      return;
+    }
+    const url = `${window.location.origin}/?slip=${ids.join(",")}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast("Kupon linki panoya kopyalandı");
+    } catch {
+      showToast(url);
+    }
+  }, [slipItems, showToast]);
 
   const handleRemoveSlipItem = useCallback(
     (matchId: number) => {
@@ -620,6 +699,7 @@ export function App() {
             onSelectMatch={(matchId, couponPick) => setSelectedMatch({ matchId, couponPick })}
             savedSlips={savedSlips}
             onSaveSlip={handleSaveSlip}
+            onCopySlipLink={handleCopySlipLink}
             onDeleteSavedSlip={handleDeleteSavedSlip}
             refreshTrigger={refreshTrigger}
           />
@@ -691,6 +771,14 @@ export function App() {
                 </p>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleCopySlipLink}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl glass-card text-slate-200 hover:border-[#00FF85]/45 text-xs font-bold"
+                >
+                  <Link2 className="w-3.5 h-3.5 text-[#00FF85]" />
+                  Linkle Gönder
+                </button>
                 <button
                   type="button"
                   onClick={handleSaveSlip}
@@ -817,6 +905,14 @@ export function App() {
               />
 
               <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={handleCopySlipLink}
+                  className="px-3 py-3 rounded-xl glass-card text-slate-200 text-xs font-bold inline-flex items-center gap-1"
+                  aria-label="Linkle Gönder"
+                >
+                  <Link2 className="w-4 h-4 text-[#00FF85]" />
+                </button>
                 <button
                   type="button"
                   onClick={() => {

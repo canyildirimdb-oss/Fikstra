@@ -75,6 +75,7 @@ export function HighlightsPage({
   const [todayCount, setTodayCount] = useState<number | null>(null);
   const [perf, setPerf] = useState<PerformanceData | null>(null);
   const [announcements, setAnnouncements] = useState<SiteAnnouncement[]>([]);
+  const [communityFavIds, setCommunityFavIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
   const [slideIdx, setSlideIdx] = useState(0);
   const [tickerPaused, setTickerPaused] = useState(false);
@@ -125,6 +126,14 @@ export function HighlightsPage({
       .getActiveAnnouncements()
       .then((rows) => {
         if (!cancelled && Array.isArray(rows)) setAnnouncements(rows);
+      })
+      .catch(() => {});
+    api
+      .getCommunityFavorites()
+      .then((res) => {
+        if (!cancelled && Array.isArray(res.prediction_ids)) {
+          setCommunityFavIds(new Set(res.prediction_ids));
+        }
       })
       .catch(() => {});
     return () => {
@@ -505,9 +514,16 @@ export function HighlightsPage({
                       {item.league}
                     </span>
                   </div>
-                  <span className="text-[11px] mono-nums text-slate-300 font-semibold shrink-0">
-                    {item.start_date_tr} {item.start_time_tr}
-                  </span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {communityFavIds.has(item.prediction_id) && (
+                      <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-[#00FF85] text-[9px] font-bold">
+                        Topluluk Favorisi
+                      </span>
+                    )}
+                    <span className="text-[11px] mono-nums text-slate-300 font-semibold">
+                      {item.start_date_tr} {item.start_time_tr}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Middle: Home & Away Teams + Dot Form + Confidence Ring */}

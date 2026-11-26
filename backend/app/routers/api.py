@@ -1,3 +1,4 @@
+import hashlib
 import json
 import threading
 import time
@@ -5,7 +6,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
+from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
@@ -16,6 +18,8 @@ from app.models import (
     CouponItem,
     Match,
     MatchContext,
+    MatchPulseVote,
+    MatchSlipAdd,
     OddsCurrent,
     OddsHistory,
     Prediction,
@@ -767,6 +771,7 @@ def get_performance(db: Session = Depends(get_db)):
     ]
 
     breakdown = _compute_performance_breakdown(db)
+    virtual_bankroll = _compute_virtual_bankroll(db)
 
     return _cache_set(
         "performance",
@@ -782,8 +787,86 @@ def get_performance(db: Session = Depends(get_db)):
             "coupon_tiers": tier_stats,
             "archive": archive,
             "breakdown": breakdown,
+            "virtual_bankroll": virtual_bankroll,
         },
     )
+
+
+def _compute_virtual_bankroll(db: Session) -> dict[str, Any]:
+    rows = (
+        db.query(Prediction)
+        .options(joinedload(Prediction.match))
+        .join(Match, Prediction.match_id == Match.id)
+        .filter(
+            Prediction.status.in_(["WON", "LOST", "VOID"]),
+            Prediction.is_top_pick.is_(True),
+            func.coalesce(Prediction.published_confidence, Prediction.confidence_score) >= 60.0,
+        )
+        .order_by(Match.start_time_utc.asc(), Prediction.settled_at.asc())
+        .all()
+    )
+    seen_matches: set[int] = set()
+    ordered: list[Prediction] = []
+    for p in rows:
+        if p.match_id in seen_matches:
+            continue
+        seen_matches.add(p.match_id)
+        ordered.append(p)
+
+    decided_rows = [p for p in ordered if p.status in {"WON", "LOST"}]
+    decided_count = len(decided_rows)
+    unit_stake = 100
+    min_sample = 15
+
+    if decided_count < min_sample:
+        return {
+            "unit_stake": unit_stake,
+            "min_sample": min_sample,
+            "decided_count": decided_count,
+            "ready": False,
+            "net_profit": None,
+            "roi_pct": None,
+            "peak_profit": None,
+            "max_drawdown": None,
+            "series": [],
+        }
+
+    cumulative = 0.0
+    peak = 0.0
+    max_dd = 0.0
+    series_by_day: dict[str, float] = {}
+    for p in ordered:
+        if p.status == "VOID":
+            delta = 0.0
+        elif p.status == "WON":
+            odd = float(p.published_odd if p.published_odd is not None else p.iddaa_odd)
+            delta = unit_stake * max(0.0, odd - 1.0)
+        else:
+            delta = -float(unit_stake)
+        cumulative += delta
+        if cumulative > peak:
+            peak = cumulative
+        dd = peak - cumulative
+        if dd > max_dd:
+            max_dd = dd
+        dt_ref = p.settled_at or (p.match.start_time_utc if p.match else None)
+        if dt_ref:
+            day_lbl = to_tr_datetime(dt_ref).strftime("%d.%m")
+            series_by_day[day_lbl] = round(cumulative, 2)
+
+    total_staked = decided_count * unit_stake
+    roi_pct = round((cumulative / total_staked) * 100.0, 1) if total_staked > 0 else 0.0
+    return {
+        "unit_stake": unit_stake,
+        "min_sample": min_sample,
+        "decided_count": decided_count,
+        "ready": True,
+        "net_profit": round(cumulative, 2),
+        "roi_pct": roi_pct,
+        "peak_profit": round(peak, 2),
+        "max_drawdown": round(max_dd, 2),
+        "series": [{"date": d, "cumulative_profit": val} for d, val in series_by_day.items()],
+    }
 
 
 def _market_group_label(market_key: str) -> str:
@@ -955,3 +1038,140 @@ def get_active_announcements(db: Session = Depends(get_db)):
         }
         for a in rows
     ]
+
+
+def _client_hash(request: Request, prediction_id: int) -> str:
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    client_ip = forwarded or (request.client.host if request.client else "unknown")
+    ua = (request.headers.get("user-agent") or "")[:60]
+    salt = settings.cron_secret or "fikstra-pulse-salt"
+    raw = f"{client_ip}|{ua}|{prediction_id}|{salt}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _build_pulse_payload(db: Session, prediction_id: int, voter_hash: Optional[str] = None) -> dict[str, Any]:
+    votes = (
+        db.query(MatchPulseVote)
+        .filter(MatchPulseVote.prediction_id == prediction_id)
+        .all()
+    )
+    total_votes = len(votes)
+    agree_count = sum(1 for v in votes if v.choice == "agree")
+    risky_count = sum(1 for v in votes if v.choice == "risky")
+    user_vote = None
+    if voter_hash:
+        for v in votes:
+            if v.voter_hash == voter_hash:
+                user_vote = v.choice
+                break
+
+    revealed = total_votes >= 5
+    agree_pct = round((agree_count / total_votes) * 100.0, 1) if revealed and total_votes > 0 else None
+    risky_pct = round(100.0 - agree_pct, 1) if agree_pct is not None else None
+
+    slip_adds = (
+        db.query(MatchSlipAdd.id)
+        .filter(MatchSlipAdd.prediction_id == prediction_id)
+        .count()
+    )
+
+    return {
+        "prediction_id": prediction_id,
+        "total_votes": total_votes,
+        "min_votes_to_reveal": 5,
+        "revealed": revealed,
+        "agree_pct": agree_pct,
+        "risky_pct": risky_pct,
+        "user_vote": user_vote,
+        "slip_adds": slip_adds,
+        "is_community_favorite": slip_adds >= 5,
+    }
+
+
+class PulseVoteIn(BaseModel):
+    choice: str
+
+
+@router.get("/predictions/community-favorites")
+def get_community_favorites(db: Session = Depends(get_db)):
+    now_utc = datetime.now(timezone.utc)
+    rows = (
+        db.query(MatchSlipAdd.prediction_id, func.count(MatchSlipAdd.id).label("cnt"))
+        .join(Prediction, MatchSlipAdd.prediction_id == Prediction.id)
+        .join(Match, Prediction.match_id == Match.id)
+        .filter(
+            Match.status == "SCHEDULED",
+            Match.start_time_utc > now_utc,
+            Prediction.status == "PENDING",
+        )
+        .group_by(MatchSlipAdd.prediction_id)
+        .having(func.count(MatchSlipAdd.id) >= 5)
+        .order_by(func.count(MatchSlipAdd.id).desc())
+        .limit(3)
+        .all()
+    )
+    return {"prediction_ids": [int(r[0]) for r in rows]}
+
+
+@router.get("/predictions/{prediction_id}/pulse")
+def get_prediction_pulse(prediction_id: int, request: Request, db: Session = Depends(get_db)):
+    pred = db.query(Prediction.id).filter(Prediction.id == prediction_id).first()
+    if not pred:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+    v_hash = _client_hash(request, prediction_id)
+    return _build_pulse_payload(db, prediction_id, voter_hash=v_hash)
+
+
+@router.post("/predictions/{prediction_id}/pulse/vote")
+def vote_prediction_pulse(
+    prediction_id: int,
+    payload: PulseVoteIn,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    choice = (payload.choice or "").strip().lower()
+    if choice not in {"agree", "risky"}:
+        raise HTTPException(status_code=400, detail="choice must be 'agree' or 'risky'")
+    pred = db.query(Prediction.id).filter(Prediction.id == prediction_id).first()
+    if not pred:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+
+    v_hash = _client_hash(request, prediction_id)
+    existing = (
+        db.query(MatchPulseVote)
+        .filter(
+            MatchPulseVote.prediction_id == prediction_id,
+            MatchPulseVote.voter_hash == v_hash,
+        )
+        .first()
+    )
+    if existing:
+        existing.choice = choice
+    else:
+        db.add(MatchPulseVote(prediction_id=prediction_id, voter_hash=v_hash, choice=choice))
+    db.commit()
+    return _build_pulse_payload(db, prediction_id, voter_hash=v_hash)
+
+
+@router.post("/predictions/{prediction_id}/pulse/slip-add")
+def record_prediction_slip_add(
+    prediction_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    pred = db.query(Prediction.id).filter(Prediction.id == prediction_id).first()
+    if not pred:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+    c_hash = _client_hash(request, prediction_id)
+    existing = (
+        db.query(MatchSlipAdd.id)
+        .filter(
+            MatchSlipAdd.prediction_id == prediction_id,
+            MatchSlipAdd.client_hash == c_hash,
+        )
+        .first()
+    )
+    if not existing:
+        db.add(MatchSlipAdd(prediction_id=prediction_id, client_hash=c_hash))
+        db.commit()
+    return {"ok": True}

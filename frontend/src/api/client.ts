@@ -7,6 +7,7 @@ import type {
   PerformanceData,
   PredictionItem,
   PredictionStatusItem,
+  PulseData,
   SiteAnnouncement,
 } from "../types";
 
@@ -78,6 +79,33 @@ export const api = {
 
   getActiveAnnouncements: () =>
     requestJson<SiteAnnouncement[]>("/api/announcements/active"),
+
+  getCommunityFavorites: () =>
+    requestJson<{ prediction_ids: number[] }>("/api/predictions/community-favorites"),
+
+  getPulse: (predictionId: number) =>
+    requestJson<PulseData>(`/api/predictions/${predictionId}/pulse`),
+
+  votePulse: (predictionId: number, choice: "agree" | "risky") =>
+    requestJson<PulseData>(`/api/predictions/${predictionId}/pulse/vote`, {
+      method: "POST",
+      body: JSON.stringify({ choice }),
+    }),
+
+  recordSlipAdd: (predictionId: number) =>
+    requestJson<{ ok: boolean }>(`/api/predictions/${predictionId}/pulse/slip-add`, {
+      method: "POST",
+    }),
+
+  adminExportCalibrationCsv: async (secret: string): Promise<Blob> => {
+    const res = await fetch(`${API_BASE}/api/admin/export/calibration.csv`, {
+      headers: { "X-Cron-Secret": secret },
+    });
+    if (!res.ok) {
+      throw new Error(`API ${res.status}: ${res.statusText}`);
+    }
+    return res.blob();
+  },
 
   adminOverview: (secret: string) =>
     requestJson<AdminOverviewData>("/api/admin/overview", {

@@ -242,6 +242,30 @@ export interface PerformanceBreakdown {
   by_market: BreakdownRow[];
 }
 
+export interface VirtualBankroll {
+  unit_stake: number;
+  min_sample: number;
+  decided_count: number;
+  ready: boolean;
+  net_profit: number | null;
+  roi_pct: number | null;
+  peak_profit: number | null;
+  max_drawdown: number | null;
+  series: { date: string; cumulative_profit: number }[];
+}
+
+export interface PulseData {
+  prediction_id: number;
+  total_votes: number;
+  min_votes_to_reveal: number;
+  revealed: boolean;
+  agree_pct: number | null;
+  risky_pct: number | null;
+  user_vote: "agree" | "risky" | null;
+  slip_adds: number;
+  is_community_favorite: boolean;
+}
+
 export interface PerformanceData {
   overall_win_rate: number | null;
   won_count: number;
@@ -267,6 +291,7 @@ export interface PerformanceData {
     status: string;
   }[];
   breakdown?: PerformanceBreakdown;
+  virtual_bankroll?: VirtualBankroll;
 }
 
 export interface CustomSlipItem {

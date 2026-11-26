@@ -189,6 +189,94 @@ def _edit_message_text(
     return False
 
 
+def _send_poll(
+    chat_id: str,
+    question: str,
+    options: list[str],
+    thread_id: Optional[int] = None,
+) -> Optional[int]:
+    payload: dict[str, Any] = {
+        "chat_id": chat_id,
+        "question": question[:300],
+        "options": [{"text": opt[:100]} for opt in options[:10]],
+        "is_anonymous": True,
+    }
+    if thread_id is not None:
+        payload["message_thread_id"] = thread_id
+    result = _tg_call("sendPoll", payload)
+    if isinstance(result, dict) and result.get("message_id"):
+        time.sleep(MESSAGE_PACING_SECONDS)
+        return int(result["message_id"])
+    return None
+
+
+def dispatch_daily_chat_poll(db: Session) -> dict[str, Any]:
+    """Send 1 daily native match poll to TELEGRAM_TOPIC_CHAT after 11:00 TR."""
+    if not _is_enabled():
+        return {"enabled": False, "sent": False}
+
+    chat_topic = _parse_topic_id(settings.telegram_topic_chat)
+    if chat_topic is None:
+        return {"enabled": True, "sent": False, "reason": "no_chat_topic"}
+
+    now_utc = datetime.now(timezone.utc)
+    now_tr = now_utc.astimezone(TR_TZ)
+    if (now_tr.hour, now_tr.minute) < (11, 0):
+        return {"enabled": True, "sent": False, "reason": "before_11_tr"}
+
+    today_tr = now_tr.date().isoformat()
+    dkey = f"daily_poll:{today_tr}"
+    if db.query(TelegramDispatch.id).filter(TelegramDispatch.dispatch_key == dkey).first():
+        return {"enabled": True, "sent": False, "reason": "already_sent"}
+
+    try:
+        _, day_end_utc = _tr_day_bounds_utc(now_utc)
+        cutoff = now_utc + timedelta(minutes=60)
+        eff_conf = func.coalesce(Prediction.published_confidence, Prediction.confidence_score)
+        top_pred = (
+            db.query(Prediction)
+            .options(joinedload(Prediction.match))
+            .join(Match, Prediction.match_id == Match.id)
+            .filter(
+                Match.status == "SCHEDULED",
+                Match.start_time_utc >= cutoff,
+                Match.start_time_utc < day_end_utc,
+                Prediction.status == "PENDING",
+                Prediction.is_top_pick.is_(True),
+            )
+            .order_by(eff_conf.desc(), Match.start_time_utc.asc())
+            .first()
+        )
+        if not top_pred or not top_pred.match:
+            return {"enabled": True, "sent": False, "reason": "no_match"}
+
+        m = top_pred.match
+        chat_id = settings.telegram_chat_id.strip()
+        question = f"📊 Günün Maçı Anketi: {m.home_team} - {m.away_team}"
+        options = [f"{m.home_team} Kazanır", "Beraberlik", f"{m.away_team} Kazanır"]
+        msg_id = _send_poll(chat_id, question, options, thread_id=chat_topic)
+        if msg_id:
+            db.add(
+                TelegramDispatch(
+                    dispatch_key=dkey,
+                    kind="daily_poll",
+                    chat_id=chat_id,
+                    thread_id=chat_topic,
+                    message_id=msg_id,
+                    content_hash=_compute_hash(question),
+                    settled_replied=True,
+                )
+            )
+            db.commit()
+            return {"enabled": True, "sent": True, "message_id": msg_id}
+    except TelegramRateLimitError:
+        logger.warning("Telegram daily poll stopped due to HTTP 429")
+    except Exception as exc:
+        logger.warning("Telegram daily poll error: %s", exc)
+
+    return {"enabled": True, "sent": False}
+
+
 def _render_coupon_message(coupon: Coupon) -> tuple[str, dict[str, Any]]:
     lock_tag = "🔒 Kilitlendi" if coupon.is_locked else "🟢 Aktif"
     date_str = coupon.coupon_date
@@ -445,6 +533,13 @@ def dispatch_telegram_updates(db: Session) -> dict[str, Any]:
         logger.warning("Telegram dispatch stopped early due to HTTP 429 rate limit")
     except Exception as exc:
         logger.warning("Telegram dispatch_telegram_updates error: %s", exc)
+
+    if not stats.get("rate_limited"):
+        try:
+            poll_res = dispatch_daily_chat_poll(db)
+            stats["daily_poll"] = bool(poll_res.get("sent"))
+        except Exception:
+            pass
 
     return stats
 

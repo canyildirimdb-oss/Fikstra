@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDownToLine, BookmarkPlus, Layers, Lock, Share2, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
+import { ArrowDownToLine, BookmarkPlus, Layers, Link2, Lock, Share2, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import { api } from "../api/client";
 import { CouponShareModal } from "../components/CouponShareModal";
 import { StakeCalculator } from "../components/StakeCalculator";
@@ -21,6 +21,7 @@ interface Props {
   ) => void;
   savedSlips: SavedSlip[];
   onSaveSlip: () => void;
+  onCopySlipLink: () => void;
   onDeleteSavedSlip: (slipId: string) => void;
   refreshTrigger: number;
 }
@@ -59,6 +60,7 @@ export function CouponsPage({
   onSelectMatch,
   savedSlips,
   onSaveSlip,
+  onCopySlipLink,
   onDeleteSavedSlip,
   refreshTrigger,
 }: Props) {
@@ -353,6 +355,14 @@ export function CouponsPage({
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={onCopySlipLink}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl glass-card text-slate-200 hover:border-[#00FF85]/45 text-xs font-bold"
+              >
+                <Link2 className="w-3.5 h-3.5 text-[#00FF85]" />
+                Linkle Gönder
+              </button>
               <button
                 type="button"
                 onClick={onSaveSlip}

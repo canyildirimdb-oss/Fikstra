@@ -23,7 +23,7 @@ import {
   YAxis,
 } from "recharts";
 import { api } from "../api/client";
-import type { CustomSlipItem, MatchDetail } from "../types";
+import type { CustomSlipItem, MatchDetail, PulseData } from "../types";
 import { formatMarketLabel, formatPickWithTeam } from "../utils/format";
 import { generateMatchSharePng } from "../utils/matchShare";
 import { ConfidenceRing } from "./ConfidenceRing";
@@ -105,6 +105,8 @@ export function MatchDetailDrawer({
   const [aiLoading, setAiLoading] = useState(false);
   const [aiExpanded, setAiExpanded] = useState(false);
   const [injuriesOpen, setInjuriesOpen] = useState(false);
+  const [pulse, setPulse] = useState<PulseData | null>(null);
+  const [pulseVoting, setPulseVoting] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const [oddsOpen, setOddsOpen] = useState(false);
   const [shareSheetOpen, setShareSheetOpen] = useState(false);
@@ -160,6 +162,7 @@ export function MatchDetailDrawer({
     setSharePreview(null);
     setShareStatus(null);
     setLinkCopied(false);
+    setPulse(null);
     let cancelled = false;
     setLoading(true);
     api
@@ -167,6 +170,11 @@ export function MatchDetailDrawer({
       .then((d) => {
         if (cancelled) return;
         setDetail(d);
+        if (d.top_prediction?.prediction_id) {
+          api.getPulse(d.top_prediction.prediction_id).then((p) => {
+            if (!cancelled) setPulse(p);
+          }).catch(() => {});
+        }
         if (!d.context.ai_summary) {
           setAiLoading(true);
           api
@@ -499,6 +507,103 @@ export function MatchDetailDrawer({
                           </div>
                         ))}
                       </div>
+                    </div>
+                  )}
+
+                  {/* Fikstra vs. Topluluk (5 oy kilitli nabız barı) */}
+                  {detail.top_prediction && (
+                    <div className="px-3.5 py-2.5 rounded-xl bg-[#0B0F17] border border-[#1F2937] space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-bold text-slate-300">
+                            Fikstra vs. Topluluk
+                          </span>
+                          {pulse?.is_community_favorite && (
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-[#00FF85] text-[9px] font-bold">
+                              Topluluk Favorisi
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={pulseVoting}
+                            onClick={async () => {
+                              if (!detail.top_prediction) return;
+                              setPulseVoting(true);
+                              try {
+                                const updated = await api.votePulse(
+                                  detail.top_prediction.prediction_id,
+                                  "agree"
+                                );
+                                setPulse(updated);
+                              } finally {
+                                setPulseVoting(false);
+                              }
+                            }}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                              pulse?.user_vote === "agree"
+                                ? "bg-[#00FF85]/20 border-[#00FF85]/60 text-[#00FF85]"
+                                : "bg-[#131926] border-[#1F2937] text-slate-300 hover:border-[#00FF85]/40"
+                            }`}
+                          >
+                            Katılıyorum
+                          </button>
+                          <button
+                            type="button"
+                            disabled={pulseVoting}
+                            onClick={async () => {
+                              if (!detail.top_prediction) return;
+                              setPulseVoting(true);
+                              try {
+                                const updated = await api.votePulse(
+                                  detail.top_prediction.prediction_id,
+                                  "risky"
+                                );
+                                setPulse(updated);
+                              } finally {
+                                setPulseVoting(false);
+                              }
+                            }}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                              pulse?.user_vote === "risky"
+                                ? "bg-amber-500/20 border-amber-500/60 text-amber-300"
+                                : "bg-[#131926] border-[#1F2937] text-slate-300 hover:border-amber-500/40"
+                            }`}
+                          >
+                            Riskli
+                          </button>
+                        </div>
+                      </div>
+
+                      {pulse && !pulse.revealed && pulse.user_vote && (
+                        <p className="text-[10px] text-slate-400">
+                          Oyun alındı · Topluluk oranı 5 oyda açılır ({pulse.total_votes}/5)
+                        </p>
+                      )}
+
+                      {pulse && pulse.revealed && pulse.agree_pct !== null && pulse.risky_pct !== null && (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-[10px] mono-nums text-slate-300">
+                            <span className="text-[#00FF85] font-bold">
+                              %{pulse.agree_pct} Katılıyor
+                            </span>
+                            <span className="text-slate-400">
+                              %{pulse.risky_pct} Riskli · {pulse.total_votes} oy
+                            </span>
+                          </div>
+                          <div className="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden flex">
+                            <div
+                              className="h-full bg-[#00FF85]"
+                              style={{ width: `${pulse.agree_pct}%` }}
+                            />
+                            <div
+                              className="h-full bg-slate-500"
+                              style={{ width: `${pulse.risky_pct}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 

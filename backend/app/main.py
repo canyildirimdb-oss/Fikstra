@@ -1,4 +1,6 @@
+import csv
 import hmac
+import io
 import json
 import os
 import threading
@@ -10,11 +12,11 @@ from urllib.parse import urlparse
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import or_, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.config import settings
 from app.database import ensure_schema, get_db
@@ -465,6 +467,75 @@ def admin_delete_announcement(
     db.delete(ann)
     db.commit()
     return {"ok": True, "deleted_id": ann_id}
+
+
+@app.get("/api/admin/export/calibration.csv")
+def admin_export_calibration_csv(
+    x_cron_secret: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _verify_cron_secret(x_cron_secret)
+    preds = (
+        db.query(Prediction)
+        .options(joinedload(Prediction.match))
+        .join(Match, Prediction.match_id == Match.id)
+        .filter(Prediction.status.in_(["WON", "LOST", "VOID"]))
+        .order_by(Match.start_time_utc.desc(), Prediction.id.desc())
+        .all()
+    )
+    tr_tz = timezone(timedelta(hours=3))
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "id",
+        "match_date_tr",
+        "league",
+        "home_team",
+        "away_team",
+        "market",
+        "pick",
+        "published_odd",
+        "closing_odd",
+        "confidence",
+        "status",
+        "home_score",
+        "away_score",
+        "is_top_pick",
+    ])
+    for p in preds:
+        m = p.match
+        if not m:
+            continue
+        dt_tr = ""
+        if m.start_time_utc:
+            dt = m.start_time_utc if m.start_time_utc.tzinfo else m.start_time_utc.replace(tzinfo=timezone.utc)
+            dt_tr = dt.astimezone(tr_tz).strftime("%Y-%m-%d %H:%M")
+        pub_odd = p.published_odd if p.published_odd is not None else p.iddaa_odd
+        conf = p.published_confidence if p.published_confidence is not None else p.confidence_score
+        writer.writerow([
+            p.id,
+            dt_tr,
+            m.league,
+            m.home_team,
+            m.away_team,
+            p.market_key,
+            p.selection_key,
+            pub_odd,
+            p.closing_odd if p.closing_odd is not None else "",
+            conf,
+            p.status,
+            m.home_score if m.home_score is not None else "",
+            m.away_score if m.away_score is not None else "",
+            p.is_top_pick,
+        ])
+
+    csv_bytes = buf.getvalue().encode("utf-8-sig")
+    today_str = datetime.now(tr_tz).date().isoformat()
+    return StreamingResponse(
+        io.BytesIO(csv_bytes),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="fikstra_kalibrasyon_{today_str}.csv"'},
+    )
 
 
 @app.post("/api/telegram/webhook")

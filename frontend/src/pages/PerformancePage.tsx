@@ -49,6 +49,7 @@ export function PerformancePage({ refreshTrigger }: Props) {
   const [data, setData] = useState<PerformanceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [glossaryOpen, setGlossaryOpen] = useState(false);
+  const [bankrollOpen, setBankrollOpen] = useState(false);
   const [breakdownTab, setBreakdownTab] = useState<"league" | "market">("league");
 
   useEffect(() => {
@@ -453,6 +454,92 @@ export function PerformancePage({ refreshTrigger }: Props) {
                 Avrupa kulüplerinin lig zorluğu ve uzun vadeli maç sonuçlarına göre hesaplanan güç reytingidir.
               </p>
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* Collapsible Virtual Bankroll (Bottom, Closed by Default) */}
+      <div className="rounded-2xl bg-[#131926] border border-[#1F2937] overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setBankrollOpen((v) => !v)}
+          className="w-full px-4 py-3 flex items-center justify-between text-xs font-bold text-slate-300 hover:bg-white/[0.02]"
+        >
+          <span>Sanal Kasa Simülasyonu (Sabit 100 ₺)</span>
+          {bankrollOpen ? (
+            <ChevronUp className="w-4 h-4 text-slate-400" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-slate-400" />
+          )}
+        </button>
+        {bankrollOpen && (
+          <div className="px-4 pb-4 pt-2 border-t border-[#1F2937] space-y-3">
+            {!data.virtual_bankroll || !data.virtual_bankroll.ready ? (
+              <p className="text-xs text-slate-400">
+                Dürüst simülasyon için en az 15 sonuçlanmış 60+ maç gerekli (şu an{" "}
+                {data.virtual_bankroll?.decided_count ?? 0}/15).
+              </p>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                  <div className="p-2.5 rounded-xl bg-[#0B0F17] border border-[#1F2937]">
+                    <span className="text-[10px] text-slate-400 block">Net Kâr/Zarar</span>
+                    <span
+                      className={`text-sm font-extrabold mono-nums ${
+                        (data.virtual_bankroll.net_profit ?? 0) >= 0
+                          ? "text-[#00FF85]"
+                          : "text-rose-400"
+                      }`}
+                    >
+                      {(data.virtual_bankroll.net_profit ?? 0) >= 0 ? "+" : ""}
+                      {data.virtual_bankroll.net_profit} ₺
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-[#0B0F17] border border-[#1F2937]">
+                    <span className="text-[10px] text-slate-400 block">ROI</span>
+                    <span className="text-sm font-extrabold mono-nums text-slate-100">
+                      %{data.virtual_bankroll.roi_pct}
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-[#0B0F17] border border-[#1F2937]">
+                    <span className="text-[10px] text-slate-400 block">En Yüksek Tepe</span>
+                    <span className="text-sm font-extrabold mono-nums text-emerald-400">
+                      +{data.virtual_bankroll.peak_profit} ₺
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-[#0B0F17] border border-[#1F2937]">
+                    <span className="text-[10px] text-slate-400 block">Maks. Düşüş</span>
+                    <span className="text-sm font-extrabold mono-nums text-amber-400">
+                      -{data.virtual_bankroll.max_drawdown} ₺
+                    </span>
+                  </div>
+                </div>
+                {data.virtual_bankroll.series.length > 1 && (
+                  <div className="h-36 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={data.virtual_bankroll.series}>
+                        <XAxis dataKey="date" tick={{ fill: "#94a3b8", fontSize: 10 }} />
+                        <YAxis tick={{ fill: "#94a3b8", fontSize: 10 }} width={40} />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: "#0B0F17",
+                            borderColor: "#1F2937",
+                            fontSize: "11px",
+                          }}
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="cumulative_profit"
+                          stroke="#00FF85"
+                          fill="#00FF85"
+                          fillOpacity={0.15}
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>

@@ -3,6 +3,7 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  Download,
   KeyRound,
   LogOut,
   Megaphone,
@@ -51,6 +52,7 @@ export function ControlPanel({ onExit }: { onExit: () => void }) {
   const [annBusy, setAnnBusy] = useState(false);
   const [tgResult, setTgResult] = useState<string | null>(null);
   const [tgBusy, setTgBusy] = useState(false);
+  const [csvBusy, setCsvBusy] = useState(false);
 
   const loadOverview = useCallback(async (sec: string) => {
     if (!sec) return;
@@ -149,6 +151,25 @@ export function ControlPanel({ onExit }: { onExit: () => void }) {
       setTgResult("Telegram test isteği sırasında hata oluştu.");
     } finally {
       setTgBusy(false);
+    }
+  };
+
+  const handleExportCsv = async () => {
+    if (!secret) return;
+    setCsvBusy(true);
+    try {
+      const blob = await api.adminExportCalibrationCsv(secret);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const today = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Istanbul" });
+      a.href = url;
+      a.download = `fikstra_kalibrasyon_${today}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setCsvBusy(false);
     }
   };
 
@@ -315,6 +336,15 @@ export function ControlPanel({ onExit }: { onExit: () => void }) {
             >
               <Send className="w-3.5 h-3.5" />
               {tgBusy ? "Gönderiliyor..." : "Telegram Bağlantı Testi"}
+            </button>
+            <button
+              type="button"
+              onClick={handleExportCsv}
+              disabled={csvBusy}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#0B0F17] border border-emerald-500/35 text-xs font-bold text-[#00FF85] hover:bg-emerald-500/10 disabled:opacity-60"
+            >
+              <Download className="w-3.5 h-3.5" />
+              {csvBusy ? "İndiriliyor..." : "Kalibrasyon Verisi İndir (CSV)"}
             </button>
             <button
               type="button"
