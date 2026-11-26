@@ -490,7 +490,12 @@ export function ControlPanel({ onExit }: { onExit: () => void }) {
         </div>
 
         {/* 5. Spor Toto 15'li Management */}
-        <SportotoAdminPanel secret={secret} />
+        <SportotoAdminPanel
+          secret={secret}
+          lastSyncAt={overview.sportoto_last_sync_at ?? null}
+          lastSyncStatus={overview.sportoto_last_status ?? null}
+          onSynced={() => loadOverview(secret)}
+        />
       </div>
     </div>
   );

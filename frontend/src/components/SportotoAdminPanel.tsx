@@ -13,7 +13,17 @@ interface RowDraft {
   actual_result: string;
 }
 
-export function SportotoAdminPanel({ secret }: { secret: string }) {
+export function SportotoAdminPanel({
+  secret,
+  lastSyncAt = null,
+  lastSyncStatus = null,
+  onSynced,
+}: {
+  secret: string;
+  lastSyncAt?: string | null;
+  lastSyncStatus?: string | null;
+  onSynced?: () => void;
+}) {
   const [weeks, setWeeks] = useState<SportotoWeekData[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [title, setTitle] = useState("Fikstra Toto Haftası");
@@ -21,6 +31,7 @@ export function SportotoAdminPanel({ secret }: { secret: string }) {
   const [rawText, setRawText] = useState("");
   const [rowEdits, setRowEdits] = useState<Record<number, RowDraft>>({});
   const [busy, setBusy] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -83,6 +94,29 @@ export function SportotoAdminPanel({ secret }: { secret: string }) {
     setRowEdits(drafts);
     setMsg(null);
     setErr(null);
+  };
+
+  const handleAutoSync = async () => {
+    setSyncBusy(true);
+    setMsg(null);
+    setErr(null);
+    try {
+      const res = await api.adminSyncSportoto(secret);
+      if (res.ok) {
+        await loadWeeks(res.week_id);
+        onSynced?.();
+        setMsg(
+          `Bülten çekildi (${res.source || "otomatik"}): ${res.title || ""} · ${res.matched_count ?? 0}/15 eşleşti` +
+            (res.published_now ? " · Otomatik yayınlandı!" : "")
+        );
+      } else {
+        setErr(res.error || "Bülten çekilemedi");
+      }
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Bülten çekme hatası");
+    } finally {
+      setSyncBusy(false);
+    }
   };
 
   const handleParse = async (e: React.FormEvent) => {
@@ -197,66 +231,99 @@ export function SportotoAdminPanel({ secret }: { secret: string }) {
   return (
     <div className="p-4 rounded-2xl glass-card space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Grid3X3 className="w-4 h-4 text-[#00FF85]" />
-          <h2 className="text-xs font-bold uppercase tracking-wider text-slate-200">
-            Spor Toto 15&apos;li Yönetimi
-          </h2>
+        <div>
+          <div className="flex items-center gap-2">
+            <Grid3X3 className="w-4 h-4 text-[#00FF85]" />
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-200">
+              Spor Toto 15&apos;li Yönetimi
+            </h2>
+          </div>
+          <p className="text-[10px] text-slate-500 mt-0.5">
+            Son otomatik güncelleme:{" "}
+            <span className="text-slate-300 font-semibold">
+              {lastSyncAt
+                ? new Date(lastSyncAt).toLocaleString("tr-TR", {
+                    timeZone: "Europe/Istanbul",
+                    day: "2-digit",
+                    month: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                : "Henüz yok"}
+            </span>
+            {lastSyncStatus ? ` (${lastSyncStatus})` : ""}
+          </p>
         </div>
-        {weeks.length > 0 && (
-          <select
-            value={selectedId ?? ""}
-            onChange={(e) => {
-              const found = weeks.find((w) => w.id === Number(e.target.value));
-              if (found) selectWeek(found);
-            }}
-            className="px-2.5 py-1.5 rounded-lg bg-[#05080D] border border-[#1F2937] text-xs text-slate-200"
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={handleAutoSync}
+            disabled={syncBusy || busy}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#00FF85] hover:bg-emerald-400 text-[#05080D] text-xs font-extrabold disabled:opacity-60"
           >
-            {weeks.map((w) => (
-              <option key={w.id} value={w.id}>
-                #{w.id} {w.title} ({w.status})
-              </option>
-            ))}
-          </select>
-        )}
+            <RefreshCw className={`w-3.5 h-3.5 ${syncBusy ? "animate-spin" : ""}`} />
+            {syncBusy ? "Çekiliyor..." : "Bülteni Şimdi Çek"}
+          </button>
+          {weeks.length > 0 && (
+            <select
+              value={selectedId ?? ""}
+              onChange={(e) => {
+                const found = weeks.find((w) => w.id === Number(e.target.value));
+                if (found) selectWeek(found);
+              }}
+              className="px-2.5 py-1.5 rounded-lg bg-[#05080D] border border-[#1F2937] text-xs text-slate-200"
+            >
+              {weeks.map((w) => (
+                <option key={w.id} value={w.id}>
+                  #{w.id} {w.title} ({w.status})
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
       </div>
 
-      {/* Parse Form */}
-      <form onSubmit={handleParse} className="space-y-2.5">
-        <div className="flex flex-col sm:flex-row gap-2">
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Hafta başlığı (ör. 15. Hafta)"
-            className="flex-1 px-3 py-2 rounded-xl bg-[#05080D] border border-[#1F2937] text-xs text-slate-100 focus:outline-none focus:border-[#00FF85]/60"
+      {/* Emergency Fallback Manual Parse Form */}
+      <details className="rounded-xl bg-[#05080D]/60 border border-[#1F2937] p-3">
+        <summary className="cursor-pointer text-[11px] font-semibold text-slate-400 hover:text-slate-200 select-none">
+          Acil Yedek: Manuel Bülten Yapıştır
+        </summary>
+        <form onSubmit={handleParse} className="space-y-2.5 mt-3">
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Hafta başlığı (ör. 15. Hafta)"
+              className="flex-1 px-3 py-2 rounded-xl bg-[#05080D] border border-[#1F2937] text-xs text-slate-100 focus:outline-none focus:border-[#00FF85]/60"
+            />
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={columnPrice}
+              onChange={(e) => setColumnPrice(e.target.value)}
+              placeholder="Kolon ₺"
+              className="w-24 px-3 py-2 rounded-xl bg-[#05080D] border border-[#1F2937] text-xs text-slate-100 mono-nums focus:outline-none focus:border-[#00FF85]/60"
+              title="Kolon fiyatı (₺)"
+            />
+          </div>
+          <textarea
+            rows={4}
+            value={rawText}
+            onChange={(e) => setRawText(e.target.value)}
+            placeholder={"15 satır yapıştır:\nGalatasaray - Fenerbahçe\nBeşiktaş - Trabzonspor | 2.10 3.40 3.20\nFenerbahçe - Kasımpaşa | 1.35 4.80 7.50 | 78 14 8"}
+            className="w-full px-3 py-2 rounded-xl bg-[#05080D] border border-[#1F2937] text-xs text-slate-100 font-mono focus:outline-none focus:border-[#00FF85]/60"
           />
-          <input
-            type="number"
-            min={1}
-            step={1}
-            value={columnPrice}
-            onChange={(e) => setColumnPrice(e.target.value)}
-            placeholder="Kolon ₺"
-            className="w-24 px-3 py-2 rounded-xl bg-[#05080D] border border-[#1F2937] text-xs text-slate-100 mono-nums focus:outline-none focus:border-[#00FF85]/60"
-            title="Kolon fiyatı (₺)"
-          />
-        </div>
-        <textarea
-          rows={4}
-          value={rawText}
-          onChange={(e) => setRawText(e.target.value)}
-          placeholder={"15 satır yapıştır:\nGalatasaray - Fenerbahçe\nBeşiktaş - Trabzonspor | 2.10 3.40 3.20\nFenerbahçe - Kasımpaşa | 1.35 4.80 7.50 | 78 14 8"}
-          className="w-full px-3 py-2 rounded-xl bg-[#05080D] border border-[#1F2937] text-xs text-slate-100 font-mono focus:outline-none focus:border-[#00FF85]/60"
-        />
-        <button
-          type="submit"
-          disabled={busy || !rawText.trim()}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#00FF85] text-[#05080D] text-xs font-extrabold disabled:opacity-50"
-        >
-          Eşleştir &amp; Taslak Oluştur
-        </button>
-      </form>
+          <button
+            type="submit"
+            disabled={busy || !rawText.trim()}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#00FF85] text-[#05080D] text-xs font-extrabold disabled:opacity-50"
+          >
+            Eşleştir &amp; Taslak Oluştur
+          </button>
+        </form>
+      </details>
 
       {msg && (
         <div className="px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-[#00FF85]">

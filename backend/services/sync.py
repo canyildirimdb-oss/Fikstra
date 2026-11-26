@@ -576,6 +576,12 @@ def run_sync_pipeline(
             pass
 
         try:
+            from app.sportoto_sync import maybe_run_sportoto_auto_sync
+            maybe_run_sportoto_auto_sync(db, min_interval_minutes=60)
+        except Exception:
+            pass
+
+        try:
             from app.routers.api import clear_api_cache
             clear_api_cache()
         except Exception:

@@ -299,6 +299,7 @@ class SportotoWeek(Base):
     __tablename__ = "sportoto_weeks"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    external_id: Mapped[Optional[str]] = mapped_column(String(64), unique=True, index=True, nullable=True)
     title: Mapped[str] = mapped_column(String(120))
     status: Mapped[str] = mapped_column(String(24), default="DRAFT", index=True)  # DRAFT | PUBLISHED | SETTLED
     column_price: Mapped[float] = mapped_column(Float, default=10.0)

@@ -28,6 +28,11 @@ from app.sportoto_engine import (
     match_and_create_sportoto_week,
     serialize_sportoto_week,
 )
+from app.sportoto_sync import (
+    get_sportoto_sync_status,
+    maybe_run_sportoto_auto_sync,
+    sync_sportoto_auto,
+)
 from app.telegram_bot import (
     check_and_send_health_alerts,
     discover_telegram_topics,
@@ -207,6 +212,13 @@ def trigger_cron_settle(
         else:
             db.add(ScraperCache(cache_key=LAST_SETTLE_KEY, payload_json=payload, updated_at=now))
         db.commit()
+
+        try:
+            st_auto = maybe_run_sportoto_auto_sync(db, min_interval_minutes=60)
+            if st_auto and st_auto.get("ok"):
+                clear_api_cache()
+        except Exception:
+            pass
 
         try:
             dispatch_telegram_settlements(db)
@@ -393,12 +405,16 @@ def admin_overview(
         .all()
     )
 
+    st_status = get_sportoto_sync_status(db)
+
     return {
         "odds_api_remaining": odds_remaining,
         "odds_api_used": odds_used,
         "last_sync_at": last_sync_at,
         "last_sync_status": last_sync.status if last_sync else None,
         "last_settle_at": last_settle_at,
+        "sportoto_last_sync_at": st_status.get("synced_at"),
+        "sportoto_last_status": st_status.get("status"),
         "void_24h_count": void_24h,
         "gemini_circuit_open": is_gemini_circuit_open(),
         "telegram_admin_configured": bool((settings.telegram_admin_chat_id or "").strip()),
@@ -582,6 +598,18 @@ def admin_list_sportoto_weeks(
         .all()
     )
     return {"items": [serialize_sportoto_week(w, include_plans=True) for w in weeks]}
+
+
+@app.post("/api/admin/sportoto/sync")
+def admin_sync_sportoto_now(
+    x_cron_secret: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _verify_cron_secret(x_cron_secret)
+    res = sync_sportoto_auto(db, trigger_notifications=True)
+    if res.get("ok"):
+        clear_api_cache()
+    return res
 
 
 @app.post("/api/admin/sportoto/parse")

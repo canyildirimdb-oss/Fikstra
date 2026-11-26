@@ -362,6 +362,8 @@ export interface AdminOverviewData {
   last_sync_at: string | null;
   last_sync_status: string | null;
   last_settle_at: string | null;
+  sportoto_last_sync_at?: string | null;
+  sportoto_last_status?: string | null;
   void_24h_count: number;
   gemini_circuit_open: boolean;
   telegram_admin_configured: boolean;

@@ -182,6 +182,25 @@ export const api = {
       headers: { "X-Cron-Secret": secret },
     }),
 
+  adminSyncSportoto: (secret: string) =>
+    requestJson<{
+      ok: boolean;
+      source?: string | null;
+      week_id?: number;
+      title?: string;
+      week_status?: string;
+      matched_count?: number;
+      model_count?: number;
+      devig_count?: number;
+      missing_count?: number;
+      public_pct_count?: number;
+      published_now?: boolean;
+      error?: string;
+    }>("/api/admin/sportoto/sync", {
+      method: "POST",
+      headers: { "X-Cron-Secret": secret },
+    }),
+
   adminParseSportoto: (
     secret: string,
     payload: { title: string; column_price?: number; raw_text: string }

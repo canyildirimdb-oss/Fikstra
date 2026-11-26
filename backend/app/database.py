@@ -88,6 +88,7 @@ def ensure_schema():
             ("url", "VARCHAR(256) DEFAULT '/'"),
         ],
         "sportoto_weeks": [
+            ("external_id", "VARCHAR(64)"),
             ("column_price", "FLOAT DEFAULT 10.0"),
         ],
         "sportoto_matches": [
@@ -139,6 +140,7 @@ def ensure_schema():
         "CREATE INDEX IF NOT EXISTS ix_match_pulse_votes_pred ON match_pulse_votes (prediction_id)",
         "CREATE INDEX IF NOT EXISTS ix_match_slip_adds_pred ON match_slip_adds (prediction_id)",
         "CREATE INDEX IF NOT EXISTS ix_sportoto_weeks_status_created ON sportoto_weeks (status, created_at)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_sportoto_weeks_external_id ON sportoto_weeks (external_id)",
         "CREATE INDEX IF NOT EXISTS ix_sportoto_matches_week_slot ON sportoto_matches (week_id, slot_no)",
     ]
     with engine.begin() as conn:
