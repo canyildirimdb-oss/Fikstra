@@ -1300,6 +1300,38 @@ def get_sportoto_history(db: Session = Depends(get_db)):
     return {"items": items}
 
 
+class SportotoOptimizeIn(BaseModel):
+    week_id: int
+    budget: int = 32
+    mode: str = "hit15"
+    locks: dict[int, str] = {}
+
+
+@router.post("/sportoto/optimize")
+def post_sportoto_optimize(payload: SportotoOptimizeIn, db: Session = Depends(get_db)):
+    week = (
+        db.query(SportotoWeek)
+        .options(joinedload(SportotoWeek.matches))
+        .filter(SportotoWeek.id == payload.week_id, SportotoWeek.status.in_(["PUBLISHED", "SETTLED"]))
+        .first()
+    )
+    if not week:
+        raise HTTPException(status_code=404, detail="Yayınlanmış Fikstra Toto haftası bulunamadı")
+    ser = serialize_sportoto_week(week, include_plans=False)
+    if ser["missing_count"] > 0:
+        raise HTTPException(status_code=400, detail="Hafta verileri eksik")
+    try:
+        return optimize_toto(
+            ser["matches"],
+            budget=int(payload.budget),
+            mode=payload.mode,
+            locks=payload.locks,
+            column_price=float(ser.get("column_price") or 10.0),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.get("/notifications/recent")
 def get_recent_notifications(db: Session = Depends(get_db)):
     rows = (

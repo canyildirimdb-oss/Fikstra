@@ -614,6 +614,13 @@ def test_pe6_calibrated_labels_and_history():
             hist_pub = client.get("/api/sportoto/history").json()
             assert hist_pub["items"] == [], f"PUBLISHED week leaked into history: {hist_pub['items']}"
 
+            opt_16 = client.post(
+                "/api/sportoto/optimize",
+                json={"week_id": w["id"], "budget": 16, "mode": "hit15", "locks": {}},
+            )
+            assert opt_16.status_code == 200, f"optimize failed: {opt_16.status_code} {opt_16.text}"
+            assert opt_16.json()["used_columns"] <= 16
+
             # Settle all 15 matches -> moves to SETTLED -> appears in history
             client.patch(
                 f"/api/admin/sportoto/weeks/{w['id']}/matches",
