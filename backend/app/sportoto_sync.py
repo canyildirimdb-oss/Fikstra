@@ -12,13 +12,8 @@ import httpx
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import Match, Prediction, ScraperCache, SportotoMatch, SportotoWeek
-from app.sportoto_engine import (
-    VALID_RESULTS,
-    _extract_ms_probs_from_match,
-    _team_similarity,
-    devig_1x2,
-    normalize_team_name,
-)
+from app.sportoto_engine import VALID_RESULTS, _extract_ms_probs_from_match, devig_1x2
+from utils.team_matcher import is_non_senior_men_team, match_score
 
 logger = logging.getLogger(__name__)
 
@@ -40,29 +35,8 @@ _DEFAULT_HEADERS = {
 }
 
 
-def _clean_team_for_match(name: str) -> str:
-    txt = normalize_team_name(name)
-    tokens = [t for t in txt.split() if t not in {"a", "s", "as"}]
-    return " ".join(tokens)
-
-
 def _team_match_score(a: str, b: str) -> float:
-    base = _team_similarity(a, b)
-    ca = _clean_team_for_match(a)
-    cb = _clean_team_for_match(b)
-    if not ca or not cb:
-        return base
-    if ca == cb:
-        return 1.0
-    if ca in cb or cb in ca:
-        return max(base, 0.92)
-    ta = ca.split()
-    tb = cb.split()
-    # Handle abbreviated prefix like "B. Dortmund" vs "Borussia Dortmund"
-    if len(ta) >= 2 and len(tb) >= 2 and ta[-1] == tb[-1] and len(ta[-1]) >= 4:
-        if ta[0][0] == tb[0][0]:
-            return max(base, 0.85)
-    return max(base, _team_similarity(ca, cb))
+    return match_score(a, b) / 100.0
 
 
 def _split_event_teams(event_name: str) -> tuple[str, str]:
@@ -273,13 +247,13 @@ def _find_best_db_match(
     candidates: list[Match],
     event_date: Any = None,
 ) -> Optional[Match]:
-    from scrapers.iddaa import is_youth_or_women_match
-
     ev_dt = _parse_event_dt_utc(event_date)
     best: Optional[Match] = None
     best_score = 0.0
     for cand in candidates:
-        if is_youth_or_women_match(cand.league or "", cand.home_team or "", cand.away_team or ""):
+        if is_non_senior_men_team(cand.home_team or "", home, cand.league or "") or is_non_senior_men_team(
+            cand.away_team or "", away, cand.league or ""
+        ):
             continue
         if ev_dt is not None and cand.start_time_utc is not None:
             c_dt = (

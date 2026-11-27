@@ -64,6 +64,7 @@ def ensure_schema():
             ("home_logo_url", "VARCHAR(512)"),
             ("away_logo_url", "VARCHAR(512)"),
             ("league_logo_url", "VARCHAR(512)"),
+            ("void_reason", "VARCHAR(128)"),
         ],
         "odds_current": [
             ("global_source", "VARCHAR(32)"),

@@ -43,6 +43,8 @@ router = APIRouter(prefix="/api", tags=["api"])
 API_CACHE_TTL_SEC = 60.0
 API_CACHE_MAX_ENTRIES = 200
 _API_CACHE: dict[str, tuple[float, Any]] = {}
+_LAST_COUPON_LIVE_REFRESH = 0.0
+_COUPON_REFRESH_LOCK = threading.Lock()
 _API_CACHE_LOCK = threading.Lock()
 _RATE_BUCKETS: dict[str, list[float]] = {}
 _RATE_LOCK = threading.Lock()
@@ -654,6 +656,20 @@ def get_coupons(
     include_history: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
+    global _LAST_COUPON_LIVE_REFRESH
+    now_mono = time.monotonic()
+    if now_mono - _LAST_COUPON_LIVE_REFRESH >= 90.0:
+        if _COUPON_REFRESH_LOCK.acquire(blocking=False):
+            try:
+                _LAST_COUPON_LIVE_REFRESH = now_mono
+                from services.settlement import refresh_live_coupon_matches
+                if refresh_live_coupon_matches(db) > 0:
+                    clear_api_cache()
+            except Exception:
+                pass
+            finally:
+                _COUPON_REFRESH_LOCK.release()
+
     cache_key = f"coupons:{include_history}"
     cached = _cache_get(cache_key)
     if cached is not None:

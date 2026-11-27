@@ -200,6 +200,8 @@ def trigger_cron_settle(
             settled_matches = settle_finished_matches(db)
             settled_coupons = 0
         else:
+            from services.settlement import refresh_live_coupon_matches
+            settled_matches = refresh_live_coupon_matches(db)
             settled_coupons = settle_coupons(db)
             if settled_coupons:
                 db.commit()

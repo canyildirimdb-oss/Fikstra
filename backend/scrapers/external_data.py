@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests
 from rapidfuzz import fuzz
 
-from utils.team_matcher import normalize_team_name, strict_team_match_score
+from utils.team_matcher import build_team_search_queries, normalize_team_name, strict_team_match_score
 from utils.time_utils import to_tr_datetime
 
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
@@ -231,6 +231,157 @@ def fetch_espn_events_for_dates(dates_yyyymmdd: list[str], timeout: float = 15.0
                         "home_score": home_score,
                         "away_score": away_score,
                         **rt_info,
+                    })
+
+    return results
+
+
+def fetch_espn_event_by_id(espn_id: str, timeout: float = 8.0) -> Optional[dict[str, Any]]:
+    """Fetch a single match's live/final 90-minute status directly by its ESPN event ID."""
+    eid = str(espn_id or "").strip()
+    if not eid:
+        return None
+    url = f"{ESPN_BASE}/all/summary?event={eid}"
+    try:
+        with httpx.Client(timeout=timeout, headers={"User-Agent": "Mozilla/5.0"}) as client:
+            resp = client.get(url)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+    except Exception:
+        return None
+
+    header = data.get("header") or {}
+    comps = header.get("competitions") or []
+    if not comps:
+        return None
+    comp = comps[0]
+    competitors = comp.get("competitors") or []
+    home_comp = next((c for c in competitors if c.get("homeAway") == "home"), None)
+    away_comp = next((c for c in competitors if c.get("homeAway") == "away"), None)
+    if not home_comp or not away_comp:
+        return None
+
+    raw_date = comp.get("date") or header.get("date") or ""
+    try:
+        start_utc = datetime.fromisoformat(str(raw_date).replace("Z", "+00:00"))
+    except ValueError:
+        start_utc = datetime.now(timezone.utc)
+    if start_utc.tzinfo is None:
+        start_utc = start_utc.replace(tzinfo=timezone.utc)
+
+    status_obj = (comp.get("status") or {}).get("type") or {}
+    completed = bool(status_obj.get("completed"))
+    state = status_obj.get("state", "pre")
+    home_score = None
+    away_score = None
+    if state in ("in", "post") or completed:
+        home_score = _extract_score_int(home_comp.get("score"))
+        away_score = _extract_score_int(away_comp.get("score"))
+
+    # Also pass top-level scoringPlays/details if header comp lacks details
+    if not comp.get("details") and data.get("scoringPlays"):
+        comp = {**comp, "details": data.get("scoringPlays")}
+    rt_info = extract_regular_time_score(comp, home_comp, away_comp, status_obj)
+
+    home_team_obj = home_comp.get("team") or {}
+    away_team_obj = away_comp.get("team") or {}
+    return {
+        "espn_id": eid,
+        "external_id": eid,
+        "league_slug": str((header.get("league") or {}).get("slug") or "all"),
+        "home_team": home_team_obj.get("displayName", ""),
+        "away_team": away_team_obj.get("displayName", ""),
+        "home_espn_id": str(home_team_obj.get("id", "")),
+        "away_espn_id": str(away_team_obj.get("id", "")),
+        "start_time_utc": start_utc,
+        "completed": completed,
+        "state": state,
+        "home_score": home_score,
+        "away_score": away_score,
+        **rt_info,
+    }
+
+
+def fetch_fotmob_matches_for_dates(dates_yyyymmdd: list[str], timeout: float = 10.0) -> list[dict[str, Any]]:
+    """Lightweight FotMob date-based matches fallback (0 Odds API credits)."""
+    seen_ids: set[str] = set()
+    results: list[dict[str, Any]] = []
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+    with httpx.Client(timeout=timeout, headers=headers) as client:
+        for d_str in dates_yyyymmdd:
+            try:
+                resp = client.get(f"https://www.fotmob.com/api/data/matches?date={d_str}")
+                if resp.status_code != 200:
+                    continue
+                leagues = resp.json().get("leagues") or []
+            except Exception:
+                continue
+
+            for lg in leagues:
+                league_name = str(lg.get("name") or "")
+                for m in lg.get("matches") or []:
+                    fid = str(m.get("id") or "").strip()
+                    if not fid or fid in seen_ids:
+                        continue
+                    seen_ids.add(fid)
+
+                    st = m.get("status") or {}
+                    raw_dt = st.get("utcTime") or ""
+                    try:
+                        start_utc = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
+                    except ValueError:
+                        continue
+                    if start_utc.tzinfo is None:
+                        start_utc = start_utc.replace(tzinfo=timezone.utc)
+
+                    reason = st.get("reason") or {}
+                    short_r = str(reason.get("short") or "").upper()
+                    long_r = str(reason.get("long") or "").upper()
+                    short_key = str(reason.get("shortKey") or "").upper()
+
+                    is_void_status = bool(
+                        st.get("cancelled")
+                        or st.get("awarded")
+                        or any(
+                            k in short_r or k in long_r or k in short_key
+                            for k in ("POSTPONED", "CANCEL", "ABANDON", "AWARD", "SUSPEND")
+                        )
+                    )
+                    completed = bool(st.get("finished")) and not is_void_status
+                    started = bool(st.get("started"))
+                    state = "post" if (completed or is_void_status) else ("in" if started else "pre")
+
+                    is_aet_or_pen = any(k in short_r or k in short_key for k in ("AET", "PEN"))
+                    home_score = None
+                    away_score = None
+                    score_str = str(st.get("scoreStr") or "").strip()
+                    if "-" in score_str and (started or completed):
+                        parts = [p.strip() for p in score_str.split("-", 1)]
+                        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                            home_score = int(parts[0])
+                            away_score = int(parts[1])
+
+                    hc = m.get("home") or {}
+                    ac = m.get("away") or {}
+                    results.append({
+                        "external_id": f"fotmob:{fid}",
+                        "fotmob_id": fid,
+                        "league_name": league_name,
+                        "home_team": str(hc.get("name") or hc.get("longName") or ""),
+                        "away_team": str(ac.get("name") or ac.get("longName") or ""),
+                        "start_time_utc": start_utc,
+                        "completed": completed,
+                        "state": state,
+                        "home_score": home_score,
+                        "away_score": away_score,
+                        "is_void_status": is_void_status,
+                        "is_aet_or_pen": is_aet_or_pen,
+                        "reg_home_score": None if is_aet_or_pen else home_score,
+                        "reg_away_score": None if is_aet_or_pen else away_score,
+                        "status_name": short_r or long_r,
+                        "status_detail": long_r or short_r,
                     })
 
     return results
@@ -1351,10 +1502,7 @@ def _fetch_365scores_team_records(
     if time.monotonic() < _365_DEAD_UNTIL:
         return []
 
-    queries = [team_name]
-    norm_q = normalize_team_name(team_name)
-    if norm_q and norm_q.lower() != team_name.lower():
-        queries.append(norm_q)
+    queries = build_team_search_queries(team_name)
 
     best_cid: Optional[str] = None
     best_score = 0.0
@@ -1450,10 +1598,7 @@ def _fetch_fotmob_team_records(
     team_name: str,
     ref_utc: datetime,
 ) -> list[dict[str, Any]]:
-    queries = [team_name]
-    norm_q = normalize_team_name(team_name)
-    if norm_q and norm_q.lower() != team_name.lower():
-        queries.append(norm_q)
+    queries = build_team_search_queries(team_name)
 
     best_tid: Optional[str] = None
     best_score = 0.0

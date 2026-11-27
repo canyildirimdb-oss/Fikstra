@@ -36,6 +36,7 @@ class Match(Base):
     away_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     external_source: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     external_match_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    void_reason: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     home_logo_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     away_logo_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     league_logo_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)

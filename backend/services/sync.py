@@ -236,10 +236,17 @@ def run_sync_pipeline(
                 match.away_team,
                 match.start_time_utc,
                 espn_events,
+                external_match_id=match.external_match_id if match.external_source == "espn" else None,
+                league_name=match.league,
             )
             if ext:
                 match.external_source = "espn"
                 match.external_match_id = ext["espn_id"]
+                if match.status != "FINISHED" and ext.get("state") == "in":
+                    if ext.get("home_score") is not None and ext.get("away_score") is not None:
+                        match.status = "LIVE"
+                        match.home_score = ext["home_score"]
+                        match.away_score = ext["away_score"]
                 if ext.get("home_logo_url"):
                     match.home_logo_url = ext["home_logo_url"]
                 if ext.get("away_logo_url"):

@@ -981,19 +981,32 @@ def check_and_send_health_alerts(db: Session) -> dict[str, Any]:
 
         # 2. High VOID count in last 24h
         cutoff_24h = now_utc - timedelta(hours=24)
-        void_count = (
-            db.query(Prediction.id)
+        void_rows = (
+            db.query(Prediction.id, Match.void_reason)
+            .join(Match, Prediction.match_id == Match.id)
             .filter(
                 Prediction.status == "VOID",
                 Prediction.is_top_pick.is_(True),
                 Prediction.settled_at.isnot(None),
                 Prediction.settled_at >= cutoff_24h,
             )
-            .count()
+            .all()
         )
+        void_count = len(void_rows)
         if void_count >= 5:
+            reason_counts: dict[str, int] = {}
+            for _, vr in void_rows:
+                key = vr or "belirsiz"
+                if key.startswith("source_status:"):
+                    label = "ertelenen/iptal"
+                elif "48h" in key:
+                    label = "48s skor bulunamadı"
+                else:
+                    label = key
+                reason_counts[label] = reason_counts.get(label, 0) + 1
+            breakdown_str = ", ".join(f"{k}: {v}" for k, v in sorted(reason_counts.items()))
             candidates.append(
-                ("high_void", f"⚠️ Yüksek VOID Sayısı: Son 24 saatte <b>{void_count}</b> tahmin VOID oldu.")
+                ("high_void", f"⚠️ Yüksek VOID Sayısı: Son 24 saatte <b>{void_count}</b> tahmin VOID oldu ({html.escape(breakdown_str)}).")
             )
 
         # 3. Gemini AI circuit breaker or latest sync ERROR
