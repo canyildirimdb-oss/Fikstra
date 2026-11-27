@@ -112,8 +112,8 @@ def run_tests():
                 assert banko is not None, "Expected BANKO coupon"
                 assert len(banko.items) == 3, f"Expected 3 legs for ultra-safe Banko, got {len(banko.items)}"
                 comb_p = math.prod(extract_leg_probability(it.prediction) for it in banko.items)
-                assert comb_p >= 0.40, f"Combined prob {comb_p:.3f} < 0.40"
-                assert 1.70 <= banko.total_odd <= 2.65, f"Banko total_odd {banko.total_odd} out of 1.70-2.65"
+                assert comb_p >= 0.30, f"Combined prob {comb_p:.3f} < 0.30"
+                assert 1.75 <= banko.total_odd <= 2.65, f"Banko total_odd {banko.total_odd} out of 1.75-2.65"
         print("TEST_1_BANKO_DYNAMIC_3_LEGS: PASS")
     finally:
         engine.dispose()
@@ -135,10 +135,10 @@ def run_tests():
                     db, iddaa_id="b2_2", home="Barcelona", away="Alaves",
                     start_utc=fixed_now + timedelta(hours=8), odd=1.36, global_odd=1.38, conf=78, prob_pct=74,
                 )
-                # 3rd leg only 66% prob (<70%) and odd 1.52 (>1.48) -> must stay 2 legs
+                # 3rd leg only 60% prob (<63%) and odd 1.52 (>1.48) -> must stay 2 legs
                 _add_match_pred(
                     db, iddaa_id="b2_3", home="Milan", away="Empoli",
-                    start_utc=fixed_now + timedelta(hours=9), odd=1.52, global_odd=1.55, conf=70, prob_pct=66,
+                    start_utc=fixed_now + timedelta(hours=9), odd=1.52, global_odd=1.55, conf=70, prob_pct=60,
                 )
                 db.commit()
                 coupons = generate_daily_coupons(db)
@@ -300,7 +300,7 @@ def run_tests():
                 coupons = generate_daily_coupons(db)
                 by_tier = {c.tier: c for c in coupons}
                 assert set(by_tier.keys()) == {"BANKO", "DENGELI", "SURPRIZ"}, f"Got tiers {list(by_tier.keys())}"
-                assert 1.70 <= by_tier["BANKO"].total_odd <= 2.65
+                assert 1.75 <= by_tier["BANKO"].total_odd <= 2.65
                 assert 2.80 <= by_tier["DENGELI"].total_odd <= 4.80
                 assert 4.80 <= by_tier["SURPRIZ"].total_odd <= 10.00
 
@@ -330,6 +330,61 @@ def run_tests():
                             assert it_json["leg_probability"] is not None
                 app.dependency_overrides.clear()
         print("TEST_6_TIER_SEPARATION_LOCKED_AND_API: PASS")
+    finally:
+        engine.dispose()
+        if db_path.exists():
+            db_path.unlink()
+
+    # 7) Match-level global data rescue (CS X2 with global_odd=None rescued when MS has global_odd; no-global & G<65 still rejected)
+    db_path, engine, SessionLocal = _make_session()
+    try:
+        with SessionLocal() as db:
+            with patch("services.coupons.datetime", _FixedDT), patch(
+                "services.coupons.tr_today_str", return_value="2026-11-28"
+            ):
+                # Match A: CS X2 has global_odd=None, but MS 2 on same match has global_odd=2.55 -> RESCUED
+                m_a, p_a_cs = _add_match_pred(
+                    db, iddaa_id="resc_a", home="Holstein Kiel", away="Kaiserslautern",
+                    start_utc=fixed_now + timedelta(hours=4), market="CS", selection="X2",
+                    odd=1.42, global_odd=None, conf=70.6, prob_pct=62.7, edge_pct=None, is_top_pick=True,
+                )
+                db.add(Prediction(
+                    match_id=m_a.id, market_key="MS", selection_key="2", iddaa_odd=2.40, global_odd=2.55,
+                    confidence_score=55.0, is_top_pick=False, status="PENDING",
+                    score_breakdown_json=json.dumps({"blended_prob_pct": 38.0}),
+                ))
+                # Match B: direct global_odd on MS 2
+                _add_match_pred(
+                    db, iddaa_id="resc_b", home="Elche", away="Atletico Madrid",
+                    start_utc=fixed_now + timedelta(hours=8), market="MS", selection="2",
+                    odd=1.33, global_odd=1.47, conf=66.1, prob_pct=65.7, edge_pct=-9.5, is_top_pick=True,
+                )
+                # Match C: NO global_odd anywhere on match -> REJECTED
+                _add_match_pred(
+                    db, iddaa_id="rej_noglob", home="LowerClub", away="OtherClub", league="Alt Lig",
+                    is_major=False, start_utc=fixed_now + timedelta(hours=6), market="CS", selection="1X",
+                    odd=1.34, global_odd=None, conf=75.0, prob_pct=68.0, edge_pct=None, is_top_pick=True,
+                )
+                # Match D: has global_odd on MS, but CS has conf=63.2 < 65 -> REJECTED
+                m_d, _ = _add_match_pred(
+                    db, iddaa_id="rej_conf", home="WeakConf", away="ClubD",
+                    start_utc=fixed_now + timedelta(hours=6), market="AU_35", selection="ALT",
+                    odd=1.32, global_odd=None, conf=63.2, prob_pct=67.9, edge_pct=None, is_top_pick=True,
+                )
+                db.add(Prediction(
+                    match_id=m_d.id, market_key="MS", selection_key="1", iddaa_odd=2.10, global_odd=2.20,
+                    confidence_score=52.0, is_top_pick=False, status="PENDING",
+                    score_breakdown_json=json.dumps({"blended_prob_pct": 44.0}),
+                ))
+                db.commit()
+
+                coupons = generate_daily_coupons(db)
+                banko = next((c for c in coupons if c.tier == "BANKO"), None)
+                assert banko is not None, "Expected rescued BANKO coupon"
+                picked_ids = {it.prediction.match.iddaa_id for it in banko.items}
+                assert picked_ids == {"resc_a", "resc_b"}, f"Expected resc_a & resc_b only, got {picked_ids}"
+                assert p_a_cs.id in {it.prediction_id for it in banko.items}
+        print("TEST_7_MATCH_LEVEL_GLOBAL_DATA_RESCUE: PASS")
     finally:
         engine.dispose()
         if db_path.exists():

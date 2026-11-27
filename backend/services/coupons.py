@@ -20,14 +20,15 @@ COUPON_SPAN_MAX_HOURS = 24
 
 # Banko Quality Armor
 BANKO_MIN_CONF = 65.0
-BANKO_MIN_PROB = 0.64
+BANKO_MIN_PROB = 0.58
 BANKO_MIN_ODD = 1.20
 BANKO_MAX_ODD = 1.58
-BANKO_CORE_MIN_COMBINED_PROB = 0.42
-BANKO_3LEG_MIN_PROB = 0.70
+BANKO_CORE_MIN_COMBINED_PROB = 0.35
+BANKO_3LEG_MIN_PROB = 0.63
+BANKO_3LEG_MIN_CONF = 66.0
 BANKO_3LEG_MAX_ODD = 1.48
-BANKO_3LEG_MIN_COMBINED_PROB = 0.40
-BANKO_TOTAL_ODD_MIN = 1.70
+BANKO_3LEG_MIN_COMBINED_PROB = 0.30
+BANKO_TOTAL_ODD_MIN = 1.75
 BANKO_TOTAL_ODD_MAX = 2.65
 BANKO_DEAD_ODD_EDGE_FLOOR = -10.5
 
@@ -118,12 +119,17 @@ def _effective_edge_pct(p: Prediction) -> Optional[float]:
     return None
 
 
-def _passes_banko_quality_armor(p: Prediction) -> bool:
-    """Strict Banko quality armor: global data present, no reserve/youth/women, no dead odds."""
+def _passes_banko_quality_armor(
+    p: Prediction,
+    matches_with_global: Optional[set[int]] = None,
+) -> bool:
+    """Strict Banko quality armor: match-level global data present, no reserve/youth/women, no dead odds."""
     m = p.match
     if _is_reserve_or_youth_or_women(m.league, m.home_team, m.away_team):
         return False
-    if p.global_odd is None or p.global_odd <= 1.01:
+    has_own_global = p.global_odd is not None and p.global_odd > 1.01
+    has_match_global = bool(matches_with_global and p.match_id in matches_with_global)
+    if not (has_own_global or has_match_global):
         return False
     if (m.data_status or "").strip().lower() in _BAD_DATA_STATUSES:
         return False
@@ -339,7 +345,7 @@ def _best_combo_for_pool(
                     return None
                 if not (BANKO_TOTAL_ODD_MIN <= total_odd <= BANKO_TOTAL_ODD_MAX):
                     return None
-                # The 3rd (weakest-quality) leg must meet the ultra-safe 3rd-leg rule (>=70% & <=1.48)
+                # The 3rd (weakest-quality) leg must meet the ultra-safe 3rd-leg rule (>=63%, conf>=66, <=1.48)
                 sorted_by_q = sorted(
                     legs,
                     key=lambda x: _leg_quality_score(x, tier, now_utc, top_pick_ids),
@@ -349,6 +355,7 @@ def _best_combo_for_pool(
                 third_odd = float(third_leg.published_odd or third_leg.iddaa_odd)
                 if (
                     extract_leg_probability(third_leg) < BANKO_3LEG_MIN_PROB
+                    or float(third_leg.confidence_score) < BANKO_3LEG_MIN_CONF
                     or third_odd > BANKO_3LEG_MAX_ODD
                 ):
                     return None
@@ -410,8 +417,8 @@ def _best_combo_for_pool(
         if best_2 and best_3:
             odd_2 = math.prod(float(p.published_odd or p.iddaa_odd) for p in best_2[1])
             comb_3 = math.prod(extract_leg_probability(p) for p in best_3[1])
-            # Add 3rd leg when it keeps Banko in 1.70-2.65 AND either 2-leg odd <1.90 or 3-leg prob >=0.42
-            if odd_2 < 1.90 or comb_3 >= 0.42:
+            # Add 3rd leg when it keeps Banko in 1.75-2.65 AND either 2-leg odd <1.90 or 3-leg prob >=0.33
+            if odd_2 < 1.90 or comb_3 >= 0.33:
                 return best_3[1]
             return best_2[1]
         return (best_3 or best_2 or (0.0, []))[1]
@@ -567,8 +574,11 @@ def generate_daily_coupons(db: Session) -> list[Coupon]:
 
     top_pick_by_match: dict[int, Prediction] = {}
     match_pick_conf: dict[tuple[int, str, str], float] = {}
+    matches_with_global: set[int] = set()
     for mp in all_pending:
         match_pick_conf[(mp.match_id, mp.market_key, mp.selection_key)] = mp.confidence_score
+        if mp.global_odd is not None and mp.global_odd > 1.01:
+            matches_with_global.add(mp.match_id)
         if mp.is_top_pick:
             top_pick_by_match[mp.match_id] = mp
     for mp in all_pending:
@@ -590,7 +600,7 @@ def generate_daily_coupons(db: Session) -> list[Coupon]:
     tier_filters = {
         "BANKO": lambda p: (
             not p.trap_warning
-            and _passes_banko_quality_armor(p)
+            and _passes_banko_quality_armor(p, matches_with_global=matches_with_global)
             and float(p.confidence_score) >= BANKO_MIN_CONF
             and extract_leg_probability(p) >= BANKO_MIN_PROB
             and BANKO_MIN_ODD <= float(p.iddaa_odd) <= BANKO_MAX_ODD
