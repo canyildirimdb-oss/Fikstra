@@ -799,11 +799,12 @@ def refresh_all_active_forms(
             return nk, {"form": [], "recent_matches": [], "goals_avg": None, "conceded_avg": None, "rest_days": None, "source": None}
 
     results_by_norm: dict[str, dict[str, Any]] = dict(cached_results)
-    if team_tasks:
+    batch_tasks = list(team_tasks.items())[:160]
+    if batch_tasks:
         from concurrent.futures import TimeoutError as FuturesTimeoutError, as_completed
 
         pool = ThreadPoolExecutor(max_workers=8)
-        future_map = {pool.submit(_fetch_team, item): item[0] for item in team_tasks.items()}
+        future_map = {pool.submit(_fetch_team, item): item[0] for item in batch_tasks}
         try:
             for fut in as_completed(future_map, timeout=25.0):
                 try:
