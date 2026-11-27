@@ -19,7 +19,8 @@ interface Props {
   onImportSlip: (items: CustomSlipItem[]) => void;
   onSelectMatch: (
     matchId: number,
-    couponPick?: { market_key: string; selection_key: string; iddaa_odd: number }
+    couponPick?: { market_key: string; selection_key: string; iddaa_odd: number },
+    predictionId?: number
   ) => void;
   savedSlips: SavedSlip[];
   onSaveSlip: () => void;
@@ -578,11 +579,15 @@ export function CouponsPage({
                       <div
                         key={it.prediction_id}
                         onClick={() =>
-                          onSelectMatch(it.match_id, {
-                            market_key: it.market_key,
-                            selection_key: it.selection_key,
-                            iddaa_odd: it.iddaa_odd,
-                          })
+                          onSelectMatch(
+                            it.match_id,
+                            {
+                              market_key: it.market_key,
+                              selection_key: it.selection_key,
+                              iddaa_odd: it.iddaa_odd,
+                            },
+                            it.prediction_id
+                          )
                         }
                         className="cursor-pointer p-2.5 rounded-xl bg-[#0B0F17] border border-[#1F2937] hover:border-slate-600"
                       >
@@ -775,11 +780,15 @@ export function CouponsPage({
                           <div
                             key={it.prediction_id}
                             onClick={() =>
-                              onSelectMatch(it.match_id, {
-                                market_key: it.market_key,
-                                selection_key: it.selection_key,
-                                iddaa_odd: it.iddaa_odd,
-                              })
+                              onSelectMatch(
+                                it.match_id,
+                                {
+                                  market_key: it.market_key,
+                                  selection_key: it.selection_key,
+                                  iddaa_odd: it.iddaa_odd,
+                                },
+                                it.prediction_id
+                              )
                             }
                             className="cursor-pointer p-2.5 rounded-xl bg-[#0B0F17] border border-[#1F2937] hover:border-slate-600"
                           >

@@ -770,12 +770,17 @@ def serialize_sportoto_week(week: SportotoWeek, include_plans: bool = True) -> d
     ordered = sorted(week.matches, key=lambda m: m.slot_no)
     pred_ids = [m.prediction_id for m in ordered if m.prediction_id]
     match_id_by_pred: dict[int, int] = {}
+    match_scores_by_id: dict[int, tuple[Optional[int], Optional[int]]] = {}
     if pred_ids:
         from sqlalchemy.orm import object_session
         sess = object_session(week)
         if sess is not None:
             rows = sess.query(Prediction.id, Prediction.match_id).filter(Prediction.id.in_(pred_ids)).all()
             match_id_by_pred = {int(pid): int(mid) for pid, mid in rows}
+            mids = list(set(match_id_by_pred.values()))
+            if mids:
+                for mid, hs, as_ in sess.query(Match.id, Match.home_score, Match.away_score).filter(Match.id.in_(mids)).all():
+                    match_scores_by_id[int(mid)] = (hs, as_)
 
     matches_payload: list[dict[str, Any]] = []
     for m in ordered:
@@ -797,6 +802,8 @@ def serialize_sportoto_week(week: SportotoWeek, include_plans: bool = True) -> d
             if m.prob_1 is not None and m.prob_x is not None and m.prob_2 is not None
             else None
         )
+        linked_mid = match_id_by_pred.get(m.prediction_id) if m.prediction_id else None
+        hs, as_ = match_scores_by_id.get(linked_mid, (None, None)) if linked_mid else (None, None)
         matches_payload.append(
             {
                 "id": m.id,
@@ -804,7 +811,9 @@ def serialize_sportoto_week(week: SportotoWeek, include_plans: bool = True) -> d
                 "home_team": m.home_team,
                 "away_team": m.away_team,
                 "prediction_id": m.prediction_id,
-                "match_id": match_id_by_pred.get(m.prediction_id) if m.prediction_id else None,
+                "match_id": linked_mid,
+                "home_score": hs,
+                "away_score": as_,
                 "source": m.source,
                 "odd_1": m.odd_1,
                 "odd_x": m.odd_x,

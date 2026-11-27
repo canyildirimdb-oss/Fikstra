@@ -748,20 +748,62 @@ def refresh_all_active_forms(
             except Exception:
                 pass
 
-    # Bulk-load MatchContext rows in 1 SQL query so we prioritize missing-form teams first
+    # Bulk-load MatchContext rows + visible/coupon priority sets so visible 72h matches come first
     ctx_by_mid = {
         c.match_id: c
         for c in db.query(MatchContext).filter(MatchContext.match_id.in_([m.id for m in scheduled])).all()
     }
+    horizon_72h = now_utc + timedelta(hours=72)
+    visible_pred_mids: set[int] = set()
+    any_pred_mids: set[int] = set()
+    for p_mid, p_top, p_conf, p_pub_conf in (
+        db.query(
+            Prediction.match_id,
+            Prediction.is_top_pick,
+            Prediction.confidence_score,
+            Prediction.published_confidence,
+        )
+        .filter(Prediction.status == "PENDING")
+        .all()
+    ):
+        any_pred_mids.add(p_mid)
+        eff_c = p_pub_conf if p_pub_conf is not None else (p_conf or 0.0)
+        if p_top and eff_c >= 60.0:
+            visible_pred_mids.add(p_mid)
+
+    active_coupon_mids: set[int] = set()
+    try:
+        from app.models import Coupon
+        for c in db.query(Coupon).filter(Coupon.status == "ACTIVE").all():
+            for it in (c.items or []):
+                if getattr(it, "match_id", None):
+                    active_coupon_mids.add(int(it.match_id))
+    except Exception:
+        pass
+
+    def _match_priority(m: Match) -> tuple[int, int, datetime]:
+        dt_utc = m.start_time_utc.replace(tzinfo=timezone.utc) if m.start_time_utc.tzinfo is None else m.start_time_utc
+        in_72h = dt_utc <= horizon_72h
+        if m.id in active_coupon_mids or (in_72h and m.id in visible_pred_mids):
+            tier = 0
+        elif in_72h and m.id in any_pred_mids:
+            tier = 1
+        elif in_72h:
+            tier = 2
+        else:
+            tier = 3
+        return (tier, 0 if m.is_major_league else 1, dt_utc)
+
+    scheduled.sort(key=_match_priority)
 
     missing_tasks: dict[str, tuple[str, datetime, Optional[bool]]] = {}
     other_tasks: dict[str, tuple[str, datetime, Optional[bool]]] = {}
     for m in scheduled:
-        if only_missing and m.id in existing_recent_mids:
-            continue
         ctx = ctx_by_mid.get(m.id)
         h_empty = not ctx or not ctx.home_form or ctx.home_form in ("[]", "null")
         a_empty = not ctx or not ctx.away_form or ctx.away_form in ("[]", "null")
+        if only_missing and m.id in existing_recent_mids and not h_empty and not a_empty:
+            continue
         for tname, pref_home, is_empty in ((m.home_team, True, h_empty), (m.away_team, False, a_empty)):
             nk = normalize_team_name(tname)
             if not nk or nk in cached_results or nk in missing_tasks or nk in other_tasks:

@@ -57,7 +57,7 @@ def format_high_confidence_notification(p: Prediction) -> tuple[str, str, str]:
     conf = p.published_confidence if p.published_confidence is not None else p.confidence_score
     title = f"🔥 Yüksek Güven · {m.home_team} - {m.away_team}"
     body = f"Öneri: {pick_lbl} ({odd:.2f} oran) · Güven {conf:.0f}/100. Detaylar için dokun."
-    return title, body, f"/?match={p.match_id}"
+    return title, body, f"/?match={p.match_id}&pred={p.id}"
 
 
 def format_odds_drop_notification(p: Prediction) -> tuple[str, str, str]:
@@ -71,7 +71,7 @@ def format_odds_drop_notification(p: Prediction) -> tuple[str, str, str]:
         f"{pick_lbl} oranı {old_odd:.2f} seviyesinden {new_odd:.2f} seviyesine geriledi. "
         "Piyasada yoğun ilgi var."
     )
-    return title, body, f"/?match={p.match_id}"
+    return title, body, f"/?match={p.match_id}&pred={p.id}"
 
 
 def format_coupon_ready_notification(coupon: Coupon) -> tuple[str, str, str]:
@@ -97,7 +97,7 @@ def format_match_settled_notification(p: Prediction) -> tuple[str, str, str]:
     mid = f"{m.home_team} {score_txt} {m.away_team}".strip()
     title = f"{prefix} · {mid}"
     body = f"Önerimiz olan {pick_lbl} ({odd:.2f}) {outcome}."
-    return title, body, f"/?match={p.match_id}"
+    return title, body, f"/?match={p.match_id}&pred={p.id}"
 
 
 def format_coupon_settled_notification(coupon: Coupon, won_legs: int, total_legs: int) -> tuple[str, str, str]:

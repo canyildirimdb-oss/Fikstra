@@ -3,17 +3,18 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, CheckCircle2, Copy, MinusCircle, X, XCircle } from "lucide-react";
 import { api } from "../api/client";
 import type { MatchDetail, PulseData } from "../types";
-import { formatPickWithTeam } from "../utils/format";
+import { formatMarketLabel, formatPickWithTeam } from "../utils/format";
 import { getMatchTopReasonChips } from "../utils/matchShare";
 import { LeagueBadge, TeamBadge } from "./TeamBadge";
 
 interface Props {
   matchId: number | null;
+  predictionId?: number;
   initialDetail?: MatchDetail | null;
   onClose: () => void;
 }
 
-export function SettledMatchDrawer({ matchId, initialDetail, onClose }: Props) {
+export function SettledMatchDrawer({ matchId, predictionId, initialDetail, onClose }: Props) {
   const [detail, setDetail] = useState<MatchDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [pulse, setPulse] = useState<PulseData | null>(null);
@@ -41,7 +42,11 @@ export function SettledMatchDrawer({ matchId, initialDetail, onClose }: Props) {
       }
     };
 
-    if (initialDetail && initialDetail.match_id === matchId) {
+    if (
+      initialDetail &&
+      initialDetail.match_id === matchId &&
+      (!predictionId || initialDetail.top_prediction?.prediction_id === predictionId)
+    ) {
       applyDetail(initialDetail);
       setLoading(false);
       return () => {
@@ -51,7 +56,7 @@ export function SettledMatchDrawer({ matchId, initialDetail, onClose }: Props) {
 
     setLoading(true);
     api
-      .getMatchDetail(matchId)
+      .getMatchDetail(matchId, undefined, undefined, predictionId)
       .then((d) => {
         if (!cancelled) applyDetail(d);
       })
@@ -62,11 +67,14 @@ export function SettledMatchDrawer({ matchId, initialDetail, onClose }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [matchId, initialDetail]);
+  }, [matchId, predictionId, initialDetail]);
 
   const handleCopyResultLink = async () => {
     if (!detail) return;
-    const url = `${window.location.origin}/?match=${detail.match_id}`;
+    const predParam = detail.top_prediction?.prediction_id
+      ? `&pred=${detail.top_prediction.prediction_id}`
+      : "";
+    const url = `${window.location.origin}/?match=${detail.match_id}${predParam}`;
     try {
       await navigator.clipboard.writeText(url);
       setLinkCopied(true);
@@ -80,6 +88,7 @@ export function SettledMatchDrawer({ matchId, initialDetail, onClose }: Props) {
   const predStatus = (tp?.status || "").toUpperCase();
   const isWon = predStatus === "WON";
   const isLost = predStatus === "LOST";
+  const isVoid = predStatus === "VOID";
 
   const lockedOdd = tp ? tp.published_odd ?? tp.iddaa_odd : null;
   const lockedConf = tp ? tp.published_confidence ?? tp.confidence_score : null;
@@ -192,7 +201,13 @@ export function SettledMatchDrawer({ matchId, initialDetail, onClose }: Props) {
                         <MinusCircle className="w-5 h-5 shrink-0" />
                       )}
                       <span className="text-sm font-black tracking-wide">
-                        {isWon ? "TAHMİN TUTTU" : isLost ? "TAHMİN TUTMADI" : "İADE / GEÇERSİZ"}
+                        {isWon
+                          ? "TAHMİN TUTTU"
+                          : isLost
+                          ? "TAHMİN TUTMADI"
+                          : isVoid
+                          ? "İADE / GEÇERSİZ"
+                          : "SONUÇ BEKLENİYOR"}
                       </span>
                     </div>
                   )}
@@ -245,9 +260,17 @@ export function SettledMatchDrawer({ matchId, initialDetail, onClose }: Props) {
                                   tp.clv_pct >= 0 ? "text-[#00FF85]" : "text-slate-300"
                                 }`}
                               >
-                                {tp.clv_pct > 0 ? "+" : ""}
-                                %{tp.clv_pct.toFixed(1)}
+                                {tp.clv_pct > 0 ? "+" : tp.clv_pct < 0 ? "-" : ""}%
+                                {Math.abs(tp.clv_pct).toFixed(1)}
                               </span>
+                              {tp.closing_odd != null &&
+                                lockedOdd !== null &&
+                                Math.abs(tp.closing_odd - lockedOdd) < 0.005 &&
+                                Math.abs(tp.clv_pct) >= 0.05 && (
+                                  <span className="block text-[9px] text-slate-400 mt-0.5">
+                                    Piyasa kapanışına göre
+                                  </span>
+                                )}
                             </div>
                           )}
                         </div>
@@ -302,6 +325,27 @@ export function SettledMatchDrawer({ matchId, initialDetail, onClose }: Props) {
                         <span className="text-rose-300 font-bold">
                           %{pulse.risky_pct ?? 0} Riskli Buldu
                         </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Other Analyzed Markets (read-only, never replaces top_prediction) */}
+                  {detail.other_predictions && detail.other_predictions.length > 0 && (
+                    <div className="p-3.5 rounded-2xl bg-[#0B0F17] border border-[#1F2937] space-y-2">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                        Bu Maçın Diğer Pazarları
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {detail.other_predictions.slice(0, 5).map((op) => (
+                          <span
+                            key={op.prediction_id}
+                            className="px-2.5 py-1 rounded-lg bg-[#131926] border border-white/10 text-[11px] text-slate-300 mono-nums"
+                          >
+                            {formatMarketLabel(op.market_key, op.selection_key)} ·{" "}
+                            <strong className="text-white">{op.iddaa_odd.toFixed(2)}</strong> · %
+                            {Math.round(op.confidence_score)}
+                          </span>
+                        ))}
                       </div>
                     </div>
                   )}

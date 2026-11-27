@@ -59,6 +59,7 @@ export interface DashboardSummary {
   settled_total: number;
   active_matches_count: number;
   top_confidence: {
+    prediction_id?: number;
     match_id: number;
     match_name: string;
     league: string;
@@ -175,6 +176,16 @@ export interface MatchDetail {
     clv_pct?: number | null;
     breakdown: ScoreBreakdown;
   } | null;
+  other_predictions?: {
+    prediction_id: number;
+    market_key: string;
+    selection_key: string;
+    iddaa_odd: number;
+    confidence_score: number;
+    status: string;
+    start_date_tr?: string | null;
+    settled_at?: string | null;
+  }[];
   odds: {
     market_key: string;
     selection_key: string;
@@ -310,6 +321,8 @@ export interface PerformanceData {
     iddaa_odd: number;
     confidence_score: number;
     status: string;
+    start_date_tr?: string | null;
+    settled_at?: string | null;
   }[];
   breakdown?: PerformanceBreakdown;
   virtual_bankroll?: VirtualBankroll;
@@ -479,6 +492,8 @@ export interface SportotoMatchItem {
   away_team: string;
   prediction_id: number | null;
   match_id?: number | null;
+  home_score?: number | null;
+  away_score?: number | null;
   source: "fikstra_model" | "market_devig" | "missing";
   odd_1: number | null;
   odd_x: number | null;

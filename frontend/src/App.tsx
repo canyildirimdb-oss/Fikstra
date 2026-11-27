@@ -60,12 +60,13 @@ type CouponsSubTab = "active" | "history" | "sportoto" | "tracked";
 function parseInitialUrl(): {
   tab: TabKey;
   matchId: number | null;
+  predictionId: number | null;
   couponsView: CouponsSubTab;
   totoSlip: string | null;
 } {
   const path = window.location.pathname.toLowerCase();
   if (path === "/bulten" || path === "/bulletin") {
-    return { tab: "highlights", matchId: null, couponsView: "active", totoSlip: null };
+    return { tab: "highlights", matchId: null, predictionId: null, couponsView: "active", totoSlip: null };
   }
   const params = new URLSearchParams(window.location.search);
   const rawTab = params.get("tab");
@@ -82,8 +83,11 @@ function parseInitialUrl(): {
   const rawMatch = params.get("match");
   const parsedMatch = rawMatch ? Number(rawMatch) : NaN;
   const matchId = Number.isInteger(parsedMatch) && parsedMatch > 0 ? parsedMatch : null;
+  const rawPred = params.get("pred");
+  const parsedPred = rawPred ? Number(rawPred) : NaN;
+  const predictionId = Number.isInteger(parsedPred) && parsedPred > 0 ? parsedPred : null;
   const totoSlip = tab === "toto" ? params.get("slip") : null;
-  return { tab, matchId, couponsView, totoSlip };
+  return { tab, matchId, predictionId, couponsView, totoSlip };
 }
 
 const TABS: { key: TabKey; label: string; mobileLabel?: string; badge?: string; icon: typeof Flame }[] = [
@@ -121,11 +125,17 @@ export function App() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [selectedMatch, setSelectedMatch] = useState<{
     matchId: number;
+    predictionId?: number;
     couponPick?: { market_key: string; selection_key: string; iddaa_odd: number };
     isSettled?: boolean;
     initialDetail?: MatchDetail | null;
   } | null>(() =>
-    initialUrlRef.current.matchId ? { matchId: initialUrlRef.current.matchId } : null
+    initialUrlRef.current.matchId
+      ? {
+          matchId: initialUrlRef.current.matchId,
+          predictionId: initialUrlRef.current.predictionId ?? undefined,
+        }
+      : null
   );
 
   const [stake, setStake] = useState<number>(() => {
@@ -708,7 +718,7 @@ export function App() {
         {tab === "highlights" && (
           <HighlightsPage
             summary={summary}
-            onSelectMatch={(id) => setSelectedMatch({ matchId: id })}
+            onSelectMatch={(id, predictionId) => setSelectedMatch({ matchId: id, predictionId })}
             onGoPerformance={() => setTab("performance")}
             onGoCoupons={() => setTab("coupons")}
             onGoToto={() => setTab("toto")}
@@ -728,7 +738,9 @@ export function App() {
             onRemoveSlipItem={handleRemoveSlipItem}
             onClearSlip={handleClearSlip}
             onImportSlip={handleImportSlip}
-            onSelectMatch={(matchId, couponPick) => setSelectedMatch({ matchId, couponPick })}
+            onSelectMatch={(matchId, couponPick, predictionId) =>
+              setSelectedMatch({ matchId, couponPick, predictionId })
+            }
             savedSlips={savedSlips}
             onSaveSlip={handleSaveSlip}
             onCopySlipLink={handleCopySlipLink}
@@ -748,7 +760,9 @@ export function App() {
         {tab === "performance" && (
           <PerformancePage
             refreshTrigger={refreshTrigger}
-            onSelectMatch={(matchId) => setSelectedMatch({ matchId, isSettled: true })}
+            onSelectMatch={(matchId, predictionId) =>
+              setSelectedMatch({ matchId, predictionId, isSettled: true })
+            }
           />
         )}
 
@@ -1051,11 +1065,15 @@ export function App() {
             const parsed = new URL(url, window.location.origin);
             const t = parsed.searchParams.get("tab");
             const m = Number(parsed.searchParams.get("match"));
+            const p = Number(parsed.searchParams.get("pred"));
             if (t === "coupons" || t === "toto" || t === "performance" || t === "highlights") {
               setTab(t);
             }
             if (Number.isInteger(m) && m > 0) {
-              setSelectedMatch({ matchId: m });
+              setSelectedMatch({
+                matchId: m,
+                predictionId: Number.isInteger(p) && p > 0 ? p : undefined,
+              });
             }
           } catch {
             // ignore
@@ -1066,16 +1084,23 @@ export function App() {
       {/* Match Detail Bottom Sheet / Modal (Pre-match vs Settled) */}
       <MatchDetailDrawer
         matchId={!selectedMatch?.isSettled ? (selectedMatch?.matchId ?? null) : null}
+        predictionId={selectedMatch?.predictionId}
         couponPick={selectedMatch?.couponPick}
         onClose={handleCloseMatch}
         onSettledDetected={(d) =>
-          setSelectedMatch({ matchId: d.match_id, isSettled: true, initialDetail: d })
+          setSelectedMatch({
+            matchId: d.match_id,
+            predictionId: d.top_prediction?.prediction_id ?? selectedMatch?.predictionId,
+            isSettled: true,
+            initialDetail: d,
+          })
         }
         slipItems={slipItems}
         onToggleSlip={handleToggleSlip}
       />
       <SettledMatchDrawer
         matchId={selectedMatch?.isSettled ? selectedMatch.matchId : null}
+        predictionId={selectedMatch?.predictionId}
         initialDetail={selectedMatch?.initialDetail}
         onClose={handleCloseMatch}
       />

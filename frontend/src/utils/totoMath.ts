@@ -144,6 +144,8 @@ export function getMatchRiskLabel(m: SportotoMatchItem): "Banko" | "Favori" | "O
 
 export interface CouponCheckResult {
   status: "improvable" | "optimal";
+  settledCount: number;
+  remainingCount: number;
   message?: string;
   improvedPicks?: Record<number, string>;
   improvedColumns?: number;
@@ -169,15 +171,20 @@ export function computeCouponCheck(
   lockedSlots: Record<number, boolean>,
   currentColumns: number,
   currentProbs: TotoProbs,
-  mode: "hit15" | "shield13" | "contrarian" = "hit15"
+  mode: "hit15" | "shield13" | "contrarian" = "hit15",
+  selectedBudget?: number
 ): CouponCheckResult {
-  // Exact DP optimization for currentColumns respecting locks & active mode
+  const settledCount = matches.filter((m) => Boolean(m.actual_result)).length;
+  const remainingCount = matches.length - settledCount;
+  const effectiveBudget = Math.max(currentColumns, selectedBudget ?? 0);
+
+  // Exact DP optimization for currentColumns respecting locks, finished matches & active mode
   let dp = new Map<number, { score: number; picks: Record<number, string> }>();
   dp.set(1, { score: 0, picks: {} });
 
   for (const m of matches) {
     const curCode = canonicalPickCode(picksBySlot[m.slot_no] || "1");
-    const locked = Boolean(lockedSlots[m.slot_no]);
+    const locked = Boolean(lockedSlots[m.slot_no] || m.actual_result);
     const opts = bestOptions(m);
     const choices: [number, string, number][] = locked
       ? [[curCode.length, curCode, pickProbForCode(m, curCode)]]
@@ -256,6 +263,8 @@ export function computeCouponCheck(
       }
       return {
         status: "improvable",
+        settledCount,
+        remainingCount,
         message,
         improvedPicks: bestState.picks,
         improvedColumns: bestCols,
@@ -263,12 +272,12 @@ export function computeCouponCheck(
     }
   }
 
-  // Already optimal: suggest next double-chance upgrade if budget < 256 and unlocked single exists
+  // Already optimal: suggest next double-chance upgrade ONLY if 2x strictly exceeds effectiveBudget and <= 256
   let nextDouble: CouponCheckResult["nextDouble"] = null;
-  if (currentColumns < 256) {
+  if (currentColumns * 2 > effectiveBudget && currentColumns * 2 <= 256) {
     let bestGain = -1;
     for (const m of matches) {
-      if (m.prob_1 === null || lockedSlots[m.slot_no]) continue;
+      if (m.prob_1 === null || lockedSlots[m.slot_no] || m.actual_result) continue;
       const curCode = canonicalPickCode(picksBySlot[m.slot_no] || "1");
       if (curCode.length !== 1) continue;
       const curP = pickProbForCode(m, curCode);
@@ -290,6 +299,8 @@ export function computeCouponCheck(
 
   return {
     status: "optimal",
+    settledCount,
+    remainingCount,
     nextDouble,
   };
 }

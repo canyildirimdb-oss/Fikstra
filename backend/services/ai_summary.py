@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Match, MatchContext, Prediction
+from utils.cache import get_cached_json
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,84 @@ MARKET_LABELS = {
 }
 
 
+_FORM_TR_MAP = {"W": "G", "D": "B", "L": "M"}
+
+
+def form_to_turkish(form_items: list[str] | tuple[str, ...] | None) -> str:
+    if not form_items:
+        return ""
+    return "".join(_FORM_TR_MAP.get(str(ch).strip().upper(), str(ch).strip().upper()) for ch in form_items if str(ch).strip())
+
+
+def sanitize_turkish_summary(text: str, injuries_json: Optional[str] = None) -> str:
+    """Normalize English form letters (W/D/L -> G/B/M), remove duplicate 'rağmen', and fix injury contradictions."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return cleaned
+
+    # Replace standalone 3-5 char W/D/L form codes like LDLLW, WLDWW, W/D/L
+    def _repl_form(match: re.Match[str]) -> str:
+        tok = match.group(0)
+        return "".join(_FORM_TR_MAP.get(c, c) for c in tok)
+
+    cleaned = re.sub(r"\b[WDL]{3,5}\b", _repl_form, cleaned)
+    cleaned = re.sub(r"\b[WDL]/[WDL]/[WDL]\b", _repl_form, cleaned)
+
+    # Fix duplicate "rağmen ... rağmen" in the same sentence
+    cleaned = re.sub(r"\brağmen\b([^.!?]*?)\brağmen\b", r"rağmen\1karşın", cleaned, flags=re.IGNORECASE)
+
+    # Fix contradiction when both teams actually have 0 recorded injuries
+    if injuries_json:
+        try:
+            inj = json.loads(injuries_json) if isinstance(injuries_json, str) else injuries_json
+            h_cnt = len(inj.get("home") or [])
+            a_cnt = len(inj.get("away") or [])
+            if h_cnt == 0 and a_cnt == 0:
+                cleaned = re.sub(
+                    r"(kadrosundaki\s+)?önemli\s+eksiklere\s+rağmen",
+                    "tam kadro yapısıyla",
+                    cleaned,
+                    flags=re.IGNORECASE,
+                )
+                cleaned = re.sub(
+                    r"sakat\s+ve\s+cezalı\s+eksiklere\s+rağmen",
+                    "sağlam kadro yapısıyla",
+                    cleaned,
+                    flags=re.IGNORECASE,
+                )
+        except Exception:
+            pass
+
+    return cleaned
+
+
+def _compute_exact_5m_goal_avg(
+    db: Optional[Session],
+    match_id: int,
+    side: str,
+) -> tuple[Optional[float], int]:
+    """Return (avg_goals, sample_count) from recent_v4:<match_id> if available."""
+    if db is None:
+        return None, 0
+    try:
+        rm = get_cached_json(db, f"recent_v4:{match_id}", ttl_hours=24.0)
+        if not isinstance(rm, dict):
+            return None, 0
+        rows = (rm.get(side) or [])[:5]
+        if not rows:
+            return None, 0
+        total = 0
+        cnt = 0
+        for r in rows:
+            gf = r.get("home_score") if r.get("is_home") else r.get("away_score")
+            if gf is not None:
+                total += int(gf)
+                cnt += 1
+        return (round(total / cnt, 2) if cnt > 0 else None), cnt
+    except Exception:
+        return None, 0
+
+
 def _finalize_ai_summary(text: str) -> str:
     """Ensure Gemini summary never ends mid-sentence if output was truncated."""
     cleaned = (text or "").strip()
@@ -56,6 +136,7 @@ def _build_rule_based_summary(
     match: Match,
     top_pred: Optional[Prediction],
     ctx: Optional[MatchContext],
+    db: Optional[Session] = None,
 ) -> str:
     parts: list[str] = []
 
@@ -69,7 +150,7 @@ def _build_rule_based_summary(
         if top_pred.global_odd:
             diff = ((top_pred.iddaa_odd / top_pred.global_odd) - 1.0) * 100.0
             if diff >= 0:
-                base += f" iddaa oranı global ortalamanın ({top_pred.global_odd:.2f}) %{diff:.1f} üzerinde değer sunuyor."
+                base += f" İddaa oranı global ortalamanın ({top_pred.global_odd:.2f}) %{diff:.1f} üzerinde değer sunuyor."
             else:
                 base += f" Global piyasa ortalaması {top_pred.global_odd:.2f} seviyesinde."
         if top_pred.score_breakdown_json:
@@ -85,13 +166,22 @@ def _build_rule_based_summary(
         parts.append(base)
 
     if ctx and (ctx.home_form or ctx.away_form):
-        hf = "".join(json.loads(ctx.home_form)) if ctx.home_form else "Veri yok"
-        af = "".join(json.loads(ctx.away_form)) if ctx.away_form else "Veri yok"
-        h_g = f"{ctx.home_goals_avg:.1f}" if ctx.home_goals_avg is not None else "-"
-        a_g = f"{ctx.away_goals_avg:.1f}" if ctx.away_goals_avg is not None else "-"
-        parts.append(
-            f"Son 5 maç formunda ev sahibi {hf} ({h_g} gol ort.), deplasman ekibi {af} ({a_g} gol ort.) grafiğine sahip."
-        )
+        hf = form_to_turkish(json.loads(ctx.home_form)) if ctx.home_form else "Veri yok"
+        af = form_to_turkish(json.loads(ctx.away_form)) if ctx.away_form else "Veri yok"
+        h5_avg, h5_cnt = _compute_exact_5m_goal_avg(db, match.id, "home")
+        a5_avg, a5_cnt = _compute_exact_5m_goal_avg(db, match.id, "away")
+        if h5_avg is not None and a5_avg is not None and h5_cnt > 0 and a5_cnt > 0:
+            parts.append(
+                f"Son {h5_cnt} maç formunda ev sahibi {hf} ({h5_avg:.1f} gol ort.), "
+                f"deplasman ekibi {af} ({a5_avg:.1f} gol ort.) grafiğine sahip."
+            )
+        else:
+            h_g = f"{ctx.home_goals_avg:.2f}" if ctx.home_goals_avg is not None else "-"
+            a_g = f"{ctx.away_goals_avg:.2f}" if ctx.away_goals_avg is not None else "-"
+            parts.append(
+                f"Son 5 maç formunda ev sahibi {hf} (sezon genelinde {h_g} gol ort.), "
+                f"deplasman ekibi {af} (sezon genelinde {a_g} gol ort.) grafiğine sahip."
+            )
 
     if ctx and ctx.injuries_json:
         inj = json.loads(ctx.injuries_json)
@@ -104,19 +194,22 @@ def _build_rule_based_summary(
                 f"Kadroda eksik listesi: {match.home_team} ({len(h_inj)} eksik: {h_names}), "
                 f"{match.away_team} ({len(a_inj)} eksik: {a_names})."
             )
+        else:
+            parts.append("Her iki ekipte de kayıtlı önemli sakat/cezalı eksiği bulunmuyor.")
 
     if not parts:
         parts.append(
             f"{match.league} kapsamındaki {match.home_team} - {match.away_team} maçı için güncel oran hareketleri takip ediliyor."
         )
 
-    return " ".join(parts)
+    return sanitize_turkish_summary(" ".join(parts), ctx.injuries_json if ctx else None)
 
 
 def generate_match_summary(
     db: Session,
     match: Match,
     force_refresh: bool = False,
+    prediction_id: Optional[int] = None,
 ) -> tuple[str, str]:
     """
     Return (summary_text, source) using DB cache first, then lightweight Gemini REST API,
@@ -130,16 +223,24 @@ def generate_match_summary(
         db.add(ctx)
         db.flush()
 
-    top_pred = (
-        db.query(Prediction)
-        .filter(Prediction.match_id == match.id, Prediction.status == "PENDING")
-        .order_by(Prediction.confidence_score.desc())
-        .first()
-    )
+    top_pred = None
+    if prediction_id is not None:
+        top_pred = (
+            db.query(Prediction)
+            .filter(Prediction.match_id == match.id, Prediction.id == prediction_id)
+            .first()
+        )
+    if top_pred is None:
+        top_pred = (
+            db.query(Prediction)
+            .filter(Prediction.match_id == match.id, Prediction.status == "PENDING")
+            .order_by(Prediction.is_top_pick.desc(), Prediction.confidence_score.desc())
+            .first()
+        )
     current_pick = f"{top_pred.market_key}:{top_pred.selection_key}" if top_pred else None
 
     if ctx.ai_summary and not force_refresh and ctx.ai_summary_pick == current_pick:
-        return ctx.ai_summary, ctx.ai_source or "cached"
+        return sanitize_turkish_summary(ctx.ai_summary, ctx.injuries_json), ctx.ai_source or "cached"
 
     api_key = (settings.gemini_api_key or "").strip()
     gemini_failed = False
@@ -154,21 +255,30 @@ def generate_match_summary(
                     time.sleep(_MIN_INTERVAL_SEC - elapsed)
 
         if not gemini_failed:
-            hf = json.loads(ctx.home_form) if ctx.home_form else []
-            af = json.loads(ctx.away_form) if ctx.away_form else []
+            hf = form_to_turkish(json.loads(ctx.home_form)) if ctx.home_form else ""
+            af = form_to_turkish(json.loads(ctx.away_form)) if ctx.away_form else ""
             inj = json.loads(ctx.injuries_json) if ctx.injuries_json else {}
+            h_inj_list = [x["player"] for x in (inj.get("home") or [])[:4]]
+            a_inj_list = [x["player"] for x in (inj.get("away") or [])[:4]]
+            h5_avg, h5_cnt = _compute_exact_5m_goal_avg(db, match.id, "home")
+            a5_avg, a5_cnt = _compute_exact_5m_goal_avg(db, match.id, "away")
+            h_avg_lbl = f"Son {h5_cnt} maç ort: {h5_avg:.2f}" if h5_avg is not None else f"Sezon geneli ort: {ctx.home_goals_avg}"
+            a_avg_lbl = f"Son {a5_cnt} maç ort: {a5_avg:.2f}" if a5_avg is not None else f"Sezon geneli ort: {ctx.away_goals_avg}"
 
             prompt = (
                 "Sen uzman bir futbol veri analistisin. Yalnızca aşağıdaki GERÇEK verilere dayanarak "
                 "3-4 cümlelik net, klişesiz, akıcı Türkçe maç analizi yaz. Veri uydurma.\n"
+                "KURALLAR: Form harflerini SADECE Türkçe yaz (G=Galibiyet, B=Beraberlik, M=Mağlubiyet), asla W/D/L yazma. "
+                "Eğer sezon geneli ortalama verildiyse 'son 5 maçta' deme, 'sezon genelinde' de. "
+                "Eksikler boşsa 'kadro sağlam' de ve asla 'eksiklere rağmen' yazma. Aynı cümlede iki kez 'rağmen' kullanma.\n"
                 f"Maç: {match.home_team} vs {match.away_team} ({match.league})\n"
                 f"Öne Çıkan Seçim: {top_pred.market_key if top_pred else '-'} {top_pred.selection_key if top_pred else '-'} "
-                f"| iddaa Oranı: {top_pred.iddaa_odd if top_pred else '-'} | Global Oran: {top_pred.global_odd if top_pred else '-'} "
+                f"| İddaa Oranı: {top_pred.iddaa_odd if top_pred else '-'} | Global Oran: {top_pred.global_odd if top_pred else '-'} "
                 f"| Güven Skoru: {top_pred.confidence_score if top_pred else '-'}/100\n"
-                f"Ev Son 5 Form: {''.join(hf) or 'Yok'} (Gol Ort: {ctx.home_goals_avg})\n"
-                f"Dep Son 5 Form: {''.join(af) or 'Yok'} (Gol Ort: {ctx.away_goals_avg})\n"
-                f"Ev Eksikler: {[x['player'] for x in (inj.get('home') or [])[:4]]}\n"
-                f"Dep Eksikler: {[x['player'] for x in (inj.get('away') or [])[:4]]}\n"
+                f"Ev Son 5 Form (G/B/M): {hf or 'Yok'} ({h_avg_lbl})\n"
+                f"Dep Son 5 Form (G/B/M): {af or 'Yok'} ({a_avg_lbl})\n"
+                f"Ev Eksikler: {h_inj_list or 'Yok (Kadro sağlam)'}\n"
+                f"Dep Eksikler: {a_inj_list or 'Yok (Kadro sağlam)'}\n"
             )
 
             for model_name in GEMINI_MODELS:
@@ -197,7 +307,7 @@ def generate_match_summary(
                             .get("text", "")
                             .strip()
                         )
-                        text = _finalize_ai_summary(raw_text)
+                        text = sanitize_turkish_summary(_finalize_ai_summary(raw_text), ctx.injuries_json)
                         if text:
                             ctx.ai_summary = text
                             ctx.ai_summary_pick = current_pick
@@ -230,10 +340,10 @@ def generate_match_summary(
 
     if gemini_failed:
         # Never cache transient 429 / 503 / timeout failures in DB; retry on next open
-        fallback_text = _build_rule_based_summary(match, top_pred, ctx)
+        fallback_text = _build_rule_based_summary(match, top_pred, ctx, db=db)
         return fallback_text, "transient_error"
 
-    fallback_text = _build_rule_based_summary(match, top_pred, ctx)
+    fallback_text = _build_rule_based_summary(match, top_pred, ctx, db=db)
     ctx.ai_summary = fallback_text
     ctx.ai_summary_pick = current_pick
     ctx.ai_source = "rule_based"

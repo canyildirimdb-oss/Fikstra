@@ -51,19 +51,28 @@ export const api = {
     return requestJson<{ count: number; items: PredictionItem[] }>(`/api/predictions?${qs}`);
   },
 
-  getMatchDetail: (matchId: number, marketKey?: string, selectionKey?: string) => {
+  getMatchDetail: (
+    matchId: number,
+    marketKey?: string,
+    selectionKey?: string,
+    predictionId?: number
+  ) => {
     const qs = new URLSearchParams();
+    if (predictionId) qs.set("prediction_id", String(predictionId));
     if (marketKey) qs.set("market_key", marketKey);
     if (selectionKey) qs.set("selection_key", selectionKey);
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return requestJson<MatchDetail>(`/api/matches/${matchId}${suffix}`);
   },
 
-  generateAiSummary: (matchId: number, force = false) =>
-    requestJson<{ match_id: number; ai_summary: string; ai_source: string }>(
-      `/api/matches/${matchId}/ai-summary?force=${force}`,
+  generateAiSummary: (matchId: number, force = false, predictionId?: number) => {
+    const qs = new URLSearchParams({ force: String(force) });
+    if (predictionId) qs.set("prediction_id", String(predictionId));
+    return requestJson<{ match_id: number; ai_summary: string; ai_source: string }>(
+      `/api/matches/${matchId}/ai-summary?${qs.toString()}`,
       { method: "POST" }
-    ),
+    );
+  },
 
   getCoupons: () => requestJson<{ coupons: CouponData[] }>("/api/coupons"),
 

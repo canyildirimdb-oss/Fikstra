@@ -16,7 +16,7 @@ import { FormStrip, LeagueBadge, TeamBadge } from "../components/TeamBadge";
 
 interface Props {
   summary: DashboardSummary | null;
-  onSelectMatch: (matchId: number) => void;
+  onSelectMatch: (matchId: number, predictionId?: number) => void;
   onGoPerformance: () => void;
   onGoCoupons: () => void;
   onGoToto: () => void;
@@ -301,7 +301,8 @@ export function HighlightsPage({
           type="button"
           onClick={() => {
             const targetId = heroItem?.match_id ?? summary?.top_confidence?.match_id;
-            if (targetId) onSelectMatch(targetId);
+            const targetPredId = heroItem?.prediction_id ?? summary?.top_confidence?.prediction_id;
+            if (targetId) onSelectMatch(targetId, targetPredId);
           }}
           className="w-full text-left relative overflow-hidden p-4 sm:p-5 rounded-2xl glass-card glass-card-hover neon-bottom-glow transition-all"
         >
@@ -601,7 +602,7 @@ export function HighlightsPage({
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: Math.min(idx * 0.025, 0.22) }}
-                onClick={() => onSelectMatch(item.match_id)}
+                onClick={() => onSelectMatch(item.match_id, item.prediction_id)}
                 className="relative cursor-pointer p-4 rounded-2xl glass-card glass-card-hover transition-all overflow-hidden"
               >
                 {/* Top Meta: League Logo + Name | Date & Time */}

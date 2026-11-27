@@ -14,8 +14,14 @@ import { formatMarketLabel, formatTurkishPossessive } from "../utils/format";
 
 interface Props {
   refreshTrigger: number;
-  onSelectMatch?: (matchId: number) => void;
+  onSelectMatch?: (matchId: number, predictionId?: number) => void;
 }
+
+const TIER_DISPLAY: Record<"BANKO" | "DENGELI" | "SURPRIZ", string> = {
+  BANKO: "BANKO",
+  DENGELI: "DENGELİ",
+  SURPRIZ: "SÜRPRİZ",
+};
 
 function MetricInfo({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
@@ -135,7 +141,9 @@ export function PerformancePage({ refreshTrigger, onSelectMatch }: Props) {
               data.avg_clv_pct !== null ? "text-xl sm:text-2xl" : "text-base sm:text-lg"
             }`}
           >
-            {data.avg_clv_pct !== null ? `${data.avg_clv_pct > 0 ? "+" : ""}%${data.avg_clv_pct}` : "Bekleniyor"}
+            {data.avg_clv_pct !== null
+              ? `${data.avg_clv_pct > 0 ? "+" : data.avg_clv_pct < 0 ? "-" : ""}%${Math.abs(data.avg_clv_pct)}`
+              : "Bekleniyor"}
           </p>
           <p className="text-[10px] text-slate-500 mt-0.5">Kapanış oranına göre fark</p>
         </div>
@@ -157,7 +165,7 @@ export function PerformancePage({ refreshTrigger, onSelectMatch }: Props) {
           return (
             <div key={tier} className="p-4 rounded-2xl bg-[#131926] border border-[#1F2937]">
               <div className="flex items-center justify-between gap-1">
-                <p className="text-[11px] text-slate-400">{tier} Kupon</p>
+                <p className="text-[11px] text-slate-400">{TIER_DISPLAY[tier]} Kupon</p>
                 {lowSample && (
                   <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[9px] font-semibold">
                     Az veri
@@ -386,13 +394,18 @@ export function PerformancePage({ refreshTrigger, onSelectMatch }: Props) {
                   <button
                     key={row.prediction_id}
                     type="button"
-                    onClick={() => onSelectMatch?.(row.match_id)}
+                    onClick={() => onSelectMatch?.(row.match_id, row.prediction_id)}
                     className={`w-full text-left px-4 py-3 flex items-center justify-between gap-3 text-xs border-l-[3px] hover:bg-white/[0.03] transition-colors ${
                       isWon ? "border-l-[#00FF85]" : "border-l-rose-500"
                     }`}
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
+                        {row.start_date_tr && (
+                          <span className="text-[10px] text-slate-500 mono-nums shrink-0">
+                            {row.start_date_tr} ·
+                          </span>
+                        )}
                         <p className="text-[10px] text-slate-400 truncate">{row.league}</p>
                         <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-[#00FF85] text-[10px] font-extrabold mono-nums shrink-0">
                           {Math.round(row.confidence_score)}

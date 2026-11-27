@@ -32,7 +32,7 @@ from app.models import (
 )
 from app.sportoto_engine import optimize_toto, serialize_sportoto_week
 from scrapers.iddaa import is_youth_or_women_match
-from services.ai_summary import generate_match_summary
+from services.ai_summary import generate_match_summary, sanitize_turkish_summary
 from services.analyzer import MAX_HIGHLIGHT_ODD, MIN_ODD_RULE
 from services.sync import is_sync_running, run_sync_pipeline
 from utils.formatting import format_pick_tr
@@ -149,7 +149,7 @@ def _serialize_ctx(ctx: Optional[MatchContext], expected_pick: Optional[str] = N
         "home_conceded_avg": ctx.home_conceded_avg,
         "away_conceded_avg": ctx.away_conceded_avg,
         "injuries": json.loads(ctx.injuries_json) if ctx.injuries_json else {"home": [], "away": []},
-        "ai_summary": ctx.ai_summary if summary_valid else None,
+        "ai_summary": sanitize_turkish_summary(ctx.ai_summary, ctx.injuries_json) if summary_valid else None,
         "ai_source": ctx.ai_source if summary_valid else None,
         "home_elo": ctx.home_elo,
         "away_elo": ctx.away_elo,
@@ -319,6 +319,7 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
         if not p:
             return None
         return {
+            "prediction_id": p.id,
             "match_id": p.match_id,
             "match_name": f"{p.match.home_team} - {p.match.away_team}",
             "league": p.match.league,
@@ -471,6 +472,7 @@ def get_match_detail(
     match_id: int,
     market_key: Optional[str] = None,
     selection_key: Optional[str] = None,
+    prediction_id: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
     m = db.query(Match).filter(Match.id == match_id).first()
@@ -478,13 +480,38 @@ def get_match_detail(
         raise HTTPException(status_code=404, detail="Match not found")
 
     odds_rows = db.query(OddsCurrent).filter(OddsCurrent.match_id == m.id).all()
+    eff_conf = func.coalesce(Prediction.published_confidence, Prediction.confidence_score)
     preds = (
         db.query(Prediction)
         .filter(Prediction.match_id == m.id)
-        .order_by(Prediction.confidence_score.desc())
+        .order_by(Prediction.is_top_pick.desc(), eff_conf.desc())
         .all()
     )
-    top_pred = preds[0] if preds else None
+    top_pred = None
+    if prediction_id is not None:
+        top_pred = next((p for p in preds if p.id == prediction_id), None)
+    if top_pred is None and market_key and selection_key:
+        mk_u = market_key.strip().upper()
+        sk_u = selection_key.strip().upper()
+        top_pred = next(
+            (p for p in preds if (p.market_key or "").upper() == mk_u and (p.selection_key or "").upper() == sk_u),
+            None,
+        )
+    if top_pred is None and preds:
+        top_pred = preds[0]
+
+    other_preds = [
+        {
+            "prediction_id": p.id,
+            "market_key": p.market_key,
+            "selection_key": p.selection_key,
+            "iddaa_odd": p.published_odd if p.published_odd is not None else p.iddaa_odd,
+            "confidence_score": p.published_confidence if p.published_confidence is not None else p.confidence_score,
+            "status": p.status,
+        }
+        for p in preds
+        if top_pred is None or p.id != top_pred.id
+    ]
     hist_rows = (
         db.query(OddsHistory)
         .filter(OddsHistory.match_id == m.id)
@@ -492,7 +519,7 @@ def get_match_detail(
         .all()
     )
 
-    # Focus odds history on the requested coupon pick (if provided) or the top prediction
+    # Focus odds history on the requested pick/prediction (if provided) or the top prediction
     target_mkt = market_key or (top_pred.market_key if top_pred else "MS")
     target_sel = selection_key or (top_pred.selection_key if top_pred else "1")
     hist_by_time: dict[str, dict] = {}
@@ -539,6 +566,7 @@ def get_match_detail(
         }
         if top_pred
         else None,
+        "other_predictions": other_preds,
         "odds": [
             {
                 "market_key": o.market_key,
@@ -560,6 +588,7 @@ def get_match_detail(
 def create_or_get_ai_summary(
     match_id: int,
     force: bool = False,
+    prediction_id: Optional[int] = None,
     x_cron_secret: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
@@ -567,7 +596,7 @@ def create_or_get_ai_summary(
     if not m:
         raise HTTPException(status_code=404, detail="Match not found")
     effective_force = bool(force and _is_valid_cron_secret(x_cron_secret))
-    text, src = generate_match_summary(db, m, force_refresh=effective_force)
+    text, src = generate_match_summary(db, m, force_refresh=effective_force, prediction_id=prediction_id)
     return {"match_id": m.id, "ai_summary": text, "ai_source": src}
 
 
@@ -742,11 +771,12 @@ def get_performance(db: Session = Depends(get_db)):
     total = len(settled)
     win_rate = round((won / total) * 100.0, 1) if total else None
 
-    # Daily trend for Recharts (real settled data only)
+    # Daily trend for Recharts (grouped by Europe/Istanbul kickoff date)
     by_day: dict[str, dict[str, int]] = defaultdict(lambda: {"won": 0, "total": 0})
     for p in settled:
-        if p.settled_at:
-            d_key = to_tr_datetime(p.settled_at).strftime("%d.%m")
+        dt_ref = (p.match.start_time_utc if p.match and p.match.start_time_utc else None) or p.settled_at
+        if dt_ref:
+            d_key = to_tr_datetime(dt_ref).strftime("%d.%m")
             by_day[d_key]["total"] += 1
             if p.status == "WON":
                 by_day[d_key]["won"] += 1
@@ -782,8 +812,8 @@ def get_performance(db: Session = Depends(get_db)):
 
     brier_terms = []
     bands = {
-        "60-69": {"min": 60, "max": 69.99, "won": 0, "total": 0},
-        "70-79": {"min": 70, "max": 79.99, "won": 0, "total": 0},
+        "60-69": {"min": 60, "max": 69, "won": 0, "total": 0},
+        "70-79": {"min": 70, "max": 79, "won": 0, "total": 0},
         "80+": {"min": 80, "max": 100, "won": 0, "total": 0},
     }
     for p in settled:
@@ -798,8 +828,9 @@ def get_performance(db: Session = Depends(get_db)):
                 brier_terms.append((prob - outcome) ** 2)
 
         eff_conf = p.published_confidence if p.published_confidence is not None else p.confidence_score
+        rounded_conf = int(round(float(eff_conf)))
         for b_cfg in bands.values():
-            if b_cfg["min"] <= eff_conf <= b_cfg["max"]:
+            if b_cfg["min"] <= rounded_conf <= b_cfg["max"]:
                 b_cfg["total"] += 1
                 if p.status == "WON":
                     b_cfg["won"] += 1
@@ -829,6 +860,7 @@ def get_performance(db: Session = Depends(get_db)):
             "iddaa_odd": p.published_odd if p.published_odd is not None else p.iddaa_odd,
             "confidence_score": p.published_confidence if p.published_confidence is not None else p.confidence_score,
             "status": p.status,
+            "start_date_tr": to_tr_datetime(p.match.start_time_utc).strftime("%d.%m") if p.match and p.match.start_time_utc else None,
             "settled_at": p.settled_at.isoformat() if p.settled_at else None,
         }
         for p in settled[:50]
@@ -895,7 +927,7 @@ def _compute_virtual_bankroll(db: Session) -> dict[str, Any]:
         dd = peak - cumulative
         if dd > max_dd:
             max_dd = dd
-        dt_ref = p.settled_at or (p.match.start_time_utc if p.match else None)
+        dt_ref = (p.match.start_time_utc if p.match and p.match.start_time_utc else None) or p.settled_at
         if dt_ref:
             day_lbl = to_tr_datetime(dt_ref).strftime("%d.%m")
             series_by_day[day_lbl] = round(cumulative, 2)

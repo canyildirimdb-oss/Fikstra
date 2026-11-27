@@ -87,6 +87,7 @@ interface CouponPickContext {
 
 interface Props {
   matchId: number | null;
+  predictionId?: number;
   couponPick?: CouponPickContext;
   onClose: () => void;
   onSettledDetected?: (detail: MatchDetail) => void;
@@ -96,6 +97,7 @@ interface Props {
 
 export function MatchDetailDrawer({
   matchId,
+  predictionId,
   couponPick,
   onClose,
   onSettledDetected,
@@ -171,7 +173,7 @@ export function MatchDetailDrawer({
     let cancelled = false;
     setLoading(true);
     api
-      .getMatchDetail(matchId, couponPick?.market_key, couponPick?.selection_key)
+      .getMatchDetail(matchId, couponPick?.market_key, couponPick?.selection_key, predictionId)
       .then((d) => {
         if (cancelled) return;
         const predStatus = (d.top_prediction?.status || "").toUpperCase();
@@ -191,7 +193,7 @@ export function MatchDetailDrawer({
         if (!d.context.ai_summary) {
           setAiLoading(true);
           api
-            .generateAiSummary(d.match_id, false)
+            .generateAiSummary(d.match_id, false, d.top_prediction?.prediction_id ?? predictionId)
             .then((res) => {
               if (!cancelled) {
                 setDetail((prev) =>
@@ -226,13 +228,17 @@ export function MatchDetailDrawer({
     return () => {
       cancelled = true;
     };
-  }, [matchId, couponPick?.market_key, couponPick?.selection_key]);
+  }, [matchId, predictionId, couponPick?.market_key, couponPick?.selection_key]);
 
   const handleGenerateAi = async () => {
     if (!detail) return;
     setAiLoading(true);
     try {
-      const res = await api.generateAiSummary(detail.match_id, false);
+      const res = await api.generateAiSummary(
+        detail.match_id,
+        false,
+        detail.top_prediction?.prediction_id ?? predictionId
+      );
       setDetail({
         ...detail,
         context: {
@@ -316,7 +322,10 @@ export function MatchDetailDrawer({
   const handleNativeShareMatch = async () => {
     if (!sharePreview || !detail) return;
     const file = new File([sharePreview.blob], sharePreview.filename, { type: "image/png" });
-    const matchUrl = `${window.location.origin}/?match=${detail.match_id}`;
+    const predParam = detail.top_prediction?.prediction_id
+      ? `&pred=${detail.top_prediction.prediction_id}`
+      : "";
+    const matchUrl = `${window.location.origin}/?match=${detail.match_id}${predParam}`;
     if (navigator.share && navigator.canShare?.({ files: [file] })) {
       try {
         await navigator.share({
@@ -344,7 +353,10 @@ export function MatchDetailDrawer({
 
   const handleCopyMatchLink = async () => {
     if (!detail) return;
-    const matchUrl = `${window.location.origin}/?match=${detail.match_id}`;
+    const predParam = detail.top_prediction?.prediction_id
+      ? `&pred=${detail.top_prediction.prediction_id}`
+      : "";
+    const matchUrl = `${window.location.origin}/?match=${detail.match_id}${predParam}`;
     try {
       await navigator.clipboard.writeText(matchUrl);
       setLinkCopied(true);
@@ -478,60 +490,78 @@ export function MatchDetailDrawer({
                                 detail.away_team
                               )}
                             </span>
-                            <span className="text-lg font-extrabold mono-nums text-white">
-                              {detail.top_prediction.iddaa_odd.toFixed(2)}
+                            <span className="text-sm sm:text-base font-extrabold mono-nums text-white">
+                              İddaa {detail.top_prediction.iddaa_odd.toFixed(2)}
                             </span>
                             {detail.top_prediction.global_odd && (
                               <span className="text-xs text-slate-400 mono-nums">
-                                Global {detail.top_prediction.global_odd.toFixed(2)}
+                                · Global {detail.top_prediction.global_odd.toFixed(2)}
                               </span>
                             )}
                           </div>
-                          {detail.top_prediction.breakdown.blended_prob_pct != null && (
-                            <p className="text-[11px] text-slate-400 mono-nums mt-1.5">
-                              Model Olasılığı: %
-                              {detail.top_prediction.breakdown.blended_prob_pct ??
-                                detail.top_prediction.breakdown.true_prob_pct}
-                            </p>
+                          {(detail.top_prediction.breakdown.blended_prob_pct != null ||
+                            detail.top_prediction.breakdown.true_prob_pct != null) && (
+                            <div className="mt-1.5 space-y-0.5">
+                              <p className="text-[11px] text-slate-300 mono-nums font-medium">
+                                Model Olasılığı: %
+                                {detail.top_prediction.breakdown.blended_prob_pct ??
+                                  detail.top_prediction.breakdown.true_prob_pct}
+                              </p>
+                              <p className="text-[10px] text-slate-500 leading-snug">
+                                Güven puanı 4 veri sinyalinin 100 üzerinden toplamıdır; olasılık bu tercihin gerçekleşme ihtimalidir.
+                              </p>
+                            </div>
                           )}
                         </div>
-                        <ConfidenceRing score={detail.top_prediction.confidence_score} size={58} />
+                        <div className="flex flex-col items-center gap-0.5 shrink-0">
+                          <ConfidenceRing score={detail.top_prediction.confidence_score} size={58} />
+                          <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
+                            Güven /100
+                          </span>
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-3 pt-2 border-t border-[#1F2937]">
                         {[
                           {
                             label: "Global Değer",
+                            hint: "İddaa oranının global piyasa ortalamasına göre değeri",
                             val: detail.top_prediction.breakdown.value,
                             max: 35,
                             color: "bg-emerald-500",
                           },
                           {
                             label: "Oran Hareketi",
+                            hint: "Açılıştan bu yana oran düşüşü ve piyasa yönü",
                             val: detail.top_prediction.breakdown.odds_move,
                             max: 25,
                             color: "bg-cyan-500",
                           },
                           {
                             label: "Form & Gol",
+                            hint: "Son 5 maç formu ve gol üretimi",
                             val: detail.top_prediction.breakdown.form_goals,
                             max: 25,
                             color: "bg-amber-500",
                           },
                           {
                             label: "Sakatlık Etkisi",
+                            hint: "Eksik oyuncuların kadro gücüne etkisi",
                             val: detail.top_prediction.breakdown.injury,
                             max: 15,
                             color: "bg-indigo-500",
                           },
                         ].map((bar) => (
-                          <div key={bar.label}>
-                            <div className="flex justify-between text-[11px] mb-1">
-                              <span className="text-slate-400">{bar.label}</span>
+                          <div key={bar.label} title={bar.hint}>
+                            <div className="flex justify-between text-[11px] mb-0.5">
+                              <span className="text-slate-300 font-medium">{bar.label}</span>
                               <span className="mono-nums text-slate-200 font-semibold">
                                 {bar.val}/{bar.max}
                               </span>
                             </div>
+                            <p className="text-[9px] text-slate-500 leading-tight mb-1 truncate">
+                              {bar.hint}
+                            </p>
                             <div className="h-1.5 rounded-full bg-[#1F2937] overflow-hidden">
                               <div
                                 className={`h-full rounded-full ${bar.color}`}
@@ -1234,6 +1264,27 @@ export function MatchDetailDrawer({
                       </div>
                     )}
                   </div>
+
+                  {/* Other Analyzed Markets (read-only, never replaces top_prediction) */}
+                  {detail.other_predictions && detail.other_predictions.length > 0 && (
+                    <div className="p-3.5 rounded-2xl bg-[#0B0F17] border border-[#1F2937] space-y-2">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                        Bu Maçın Diğer Pazarları
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {detail.other_predictions.slice(0, 5).map((op) => (
+                          <span
+                            key={op.prediction_id}
+                            className="px-2.5 py-1 rounded-lg bg-[#131926] border border-white/10 text-[11px] text-slate-300 mono-nums"
+                          >
+                            {formatMarketLabel(op.market_key, op.selection_key)} ·{" "}
+                            <strong className="text-white">{op.iddaa_odd.toFixed(2)}</strong> · %
+                            {Math.round(op.confidence_score)}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>

@@ -389,8 +389,8 @@ def test_tg4_deep_links():
 
     base = telegram_bot._public_url()
     assert c_markup["inline_keyboard"][0][0]["url"] == f"{base}/?tab=coupons"
-    assert s_markup["inline_keyboard"][0][0]["url"] == f"{base}/?match={p.match_id}"
-    assert v_markup["inline_keyboard"][0][0]["url"] == f"{base}/?match={p.match_id}"
+    assert s_markup["inline_keyboard"][0][0]["url"] == f"{base}/?match={p.match_id}&pred={p.id}"
+    assert v_markup["inline_keyboard"][0][0]["url"] == f"{base}/?match={p.match_id}&pred={p.id}"
 
     # Verify daily report button uses /?tab=performance
     now_tr = datetime(2026, 11, 26, 2, 0, tzinfo=telegram_bot.TR_TZ)

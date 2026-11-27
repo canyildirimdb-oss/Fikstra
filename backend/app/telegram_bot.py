@@ -331,7 +331,7 @@ def _render_single_message(pred: Prediction) -> tuple[str, dict[str, Any]]:
         f"🎯 Tercih: <b>{html.escape(pick_lbl)}</b>\n"
         f"💰 Oran: <b>{odd_val:.2f}</b> · Güven: <b>%{conf:.0f}</b>"
     )
-    return text, _inline_link_markup("Fikstra'da İncele", f"/?match={pred.match_id}")
+    return text, _inline_link_markup("Fikstra'da İncele", f"/?match={pred.match_id}&pred={pred.id}")
 
 
 def _render_value_message(pred: Prediction) -> tuple[str, dict[str, Any]]:
@@ -356,7 +356,7 @@ def _render_value_message(pred: Prediction) -> tuple[str, dict[str, Any]]:
         f"💰 Oran: <b>{odd_val:.2f}</b> · Güven: <b>%{conf:.0f}</b>\n"
         f"{signal_block}"
     )
-    return text, _inline_link_markup("Fikstra'da İncele", f"/?match={pred.match_id}")
+    return text, _inline_link_markup("Fikstra'da İncele", f"/?match={pred.match_id}&pred={pred.id}")
 
 
 def _tr_day_bounds_utc(now_utc: datetime) -> tuple[datetime, datetime]:
@@ -1166,9 +1166,9 @@ def handle_telegram_webhook(update: dict[str, Any], db: Session) -> dict[str, An
                 f"{idx}. <b>{html.escape(m.home_team)} - {html.escape(m.away_team)}</b>\n"
                 f"   🏆 {html.escape(m.league)} · 🕒 {_format_tr_dt(m.start_time_utc)}\n"
                 f"   🎯 {html.escape(pick_lbl)} (<code>{odd_val:.2f}</code>) · Güven <b>%{conf:.0f}</b> · "
-                f"<a href=\"{base_url}/?match={p.match_id}\">İncele</a>"
+                f"<a href=\"{base_url}/?match={p.match_id}&pred={p.id}\">İncele</a>"
             )
-            buttons.append([{"text": f"{m.home_team} - {m.away_team}", "url": f"{base_url}/?match={p.match_id}"}])
+            buttons.append([{"text": f"{m.home_team} - {m.away_team}", "url": f"{base_url}/?match={p.match_id}&pred={p.id}"}])
 
         _send_message(chat_id, "\n".join(lines), reply_markup={"inline_keyboard": buttons})
         return {"ok": True, "command": cmd, "count": len(preds)}

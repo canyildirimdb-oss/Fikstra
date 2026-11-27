@@ -221,7 +221,7 @@ export function FikstraTotoPage({
     }
 
     const probs = exactPoissonBinomial(pickProbs);
-    const couponCheck = computeCouponCheck(week.matches, picksBySlot, lockedSlots, cols, probs, mode);
+    const couponCheck = computeCouponCheck(week.matches, picksBySlot, lockedSlots, cols, probs, mode, budget);
     const survival = computeLiveSurvival(week.matches, picksBySlot);
     const colPrice = week.column_price || 10;
     return {
@@ -234,7 +234,7 @@ export function FikstraTotoPage({
       couponCheck,
       survival,
     };
-  }, [week, picksBySlot, lockedSlots, mode]);
+  }, [week, picksBySlot, lockedSlots, mode, budget]);
 
   const hasLocksOrManualEdits = useMemo(() => {
     if (!week) return false;
@@ -519,7 +519,12 @@ export function FikstraTotoPage({
                 </p>
               </div>
               <div className="px-3 py-2.5 rounded-xl bg-[#05080D]/80 border border-white/10">
-                <p className="text-[10px] text-slate-400">İkramiye Şansı (13+)</p>
+                <div className="flex items-center justify-between gap-1">
+                  <p className="text-[10px] text-slate-400">İkramiye Şansı (13+)</p>
+                  <span className="px-1.5 py-0.2 rounded bg-white/[0.06] text-[9px] font-semibold text-slate-300">
+                    Başlangıç
+                  </span>
+                </div>
                 <p className="text-xs sm:text-sm font-extrabold text-slate-100 mono-nums mt-0.5">
                   %{liveStats.probs.p13_plus.toFixed(1)}
                 </p>
@@ -532,9 +537,14 @@ export function FikstraTotoPage({
             {/* Live Survival Strip */}
             {liveStats.survival && (
               <div className="px-3 py-2 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex flex-wrap items-center justify-between gap-2 text-xs">
-                <span className="font-bold text-cyan-200 mono-nums">
-                  Canlı Durum: {liveStats.survival.settled_hits}/{liveStats.survival.settled_count} tuttu
-                  ({liveStats.survival.remaining_count} maç kaldı)
+                <span className="font-bold text-cyan-200 mono-nums inline-flex items-center gap-1.5">
+                  <span>
+                    Canlı Durum: {liveStats.survival.settled_hits}/{liveStats.survival.settled_count} tuttu
+                    ({liveStats.survival.remaining_count} maç kaldı)
+                  </span>
+                  <span className="px-1.5 py-0.2 rounded bg-cyan-500/20 border border-cyan-400/35 text-[9px] font-extrabold text-cyan-200">
+                    Güncel
+                  </span>
                 </span>
                 <div className="flex flex-wrap items-center gap-2 mono-nums text-[11px]">
                   <span className={liveStats.survival.can_hit_15 ? "text-[#00FF85]" : "text-rose-400 line-through"}>
@@ -648,6 +658,7 @@ export function FikstraTotoPage({
                   ? "bg-cyan-500/15 text-cyan-300 border-cyan-500/30"
                   : "bg-white/[0.06] text-slate-300 border-white/10";
 
+              const isFinished = Boolean(m.actual_result);
               const hit = m.actual_result ? code.includes(m.actual_result) : null;
               const hasPublic =
                 m.public_pct_1 !== null && m.public_pct_x !== null && m.public_pct_2 !== null;
@@ -709,7 +720,9 @@ export function FikstraTotoPage({
                                 hit ? "bg-emerald-500/20 text-[#00FF85]" : "bg-rose-500/20 text-rose-300"
                               }`}
                             >
-                              MS:{m.actual_result} {hit ? "✓" : "✕"}
+                              MS:{m.actual_result}
+                              {m.home_score != null && m.away_score != null ? ` (${m.home_score}-${m.away_score})` : ""}{" "}
+                              {hit ? "✓" : "✕"}
                             </span>
                           )}
                         </div>
@@ -737,7 +750,7 @@ export function FikstraTotoPage({
                       </div>
                     </div>
 
-                    {/* Interactive 1 / X / 2 + Lock */}
+                    {/* Interactive 1 / X / 2 + Lock (disabled once finished) */}
                     <div className="flex items-center gap-1 shrink-0">
                       {(["1", "X", "2"] as const).map((out) => {
                         const active = code.includes(out);
@@ -745,8 +758,9 @@ export function FikstraTotoPage({
                           <button
                             key={out}
                             type="button"
+                            disabled={isFinished}
                             onClick={() => toggleOutcome(m.slot_no, out)}
-                            className={`w-8 h-8 rounded-lg text-xs font-extrabold mono-nums border transition-all ${
+                            className={`w-8 h-8 rounded-lg text-xs font-extrabold mono-nums border transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
                               active
                                 ? "bg-[#00FF85] text-[#05080D] border-[#00FF85] shadow-[0_0_12px_-3px_rgba(0,255,133,0.65)]"
                                 : "bg-[#05080D]/80 text-slate-400 border-white/10 hover:text-white"
@@ -758,15 +772,16 @@ export function FikstraTotoPage({
                       })}
                       <button
                         type="button"
+                        disabled={isFinished}
                         onClick={() => toggleLock(m.slot_no)}
-                        aria-label={`Maç ${m.slot_no} kilitle`}
-                        className={`w-8 h-8 rounded-lg border flex items-center justify-center transition-colors ${
-                          locked
+                        aria-label={isFinished ? `Maç ${m.slot_no} sonuçlandı` : `Maç ${m.slot_no} kilitle`}
+                        className={`w-8 h-8 rounded-lg border flex items-center justify-center transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+                          isFinished || locked
                             ? "bg-amber-500/20 border-amber-500/50 text-amber-300"
                             : "bg-[#05080D]/60 border-white/10 text-slate-500 hover:text-slate-300"
                         }`}
                       >
-                        {locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+                        {isFinished || locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
                       </button>
                     </div>
                   </div>
@@ -809,7 +824,11 @@ export function FikstraTotoPage({
               <div className="space-y-2">
                 <div className="px-3 py-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-2 text-xs font-bold text-[#00FF85]">
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  <span>Kuponun {liveStats.columns} kolon için en verimli dağılımda.</span>
+                  <span>
+                    {liveStats.couponCheck.settledCount > 0
+                      ? `Sonuçlanan ${liveStats.couponCheck.settledCount} maç kilitli; kalan ${liveStats.couponCheck.remainingCount} maç için kuponun ${liveStats.columns} kolon bütçesinde en verimli dağılımda.`
+                      : `Kuponun ${liveStats.columns} kolon için en verimli dağılımda.`}
+                  </span>
                 </div>
                 {liveStats.couponCheck.nextDouble && (
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-300 px-1">
@@ -828,6 +847,9 @@ export function FikstraTotoPage({
                       onClick={() => {
                         const nd = liveStats.couponCheck.nextDouble!;
                         setPicksBySlot((prev) => ({ ...prev, [nd.slot_no]: nd.to_code }));
+                        if ((BUDGET_OPTIONS as readonly number[]).includes(nd.new_columns)) {
+                          setBudget(nd.new_columns);
+                        }
                         showToast(`${nd.new_columns} kolona yükseltildi`);
                       }}
                       className="px-3 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.12] border border-white/15 text-[11px] font-bold text-slate-200 mono-nums shrink-0 transition-colors"
