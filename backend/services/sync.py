@@ -700,7 +700,7 @@ def refresh_all_active_forms(
     if only_with_predictions:
         pred_match_ids = db.query(Prediction.match_id).distinct()
         q = q.filter(Match.id.in_(pred_match_ids))
-    scheduled = q.all()
+    scheduled = q.order_by(Match.is_major_league.desc(), Match.start_time_utc.asc()).all()
     if not scheduled:
         return {
             "ok": True,
@@ -748,15 +748,30 @@ def refresh_all_active_forms(
             except Exception:
                 pass
 
-    team_tasks: dict[str, tuple[str, datetime, Optional[bool]]] = {}
+    # Bulk-load MatchContext rows in 1 SQL query so we prioritize missing-form teams first
+    ctx_by_mid = {
+        c.match_id: c
+        for c in db.query(MatchContext).filter(MatchContext.match_id.in_([m.id for m in scheduled])).all()
+    }
+
+    missing_tasks: dict[str, tuple[str, datetime, Optional[bool]]] = {}
+    other_tasks: dict[str, tuple[str, datetime, Optional[bool]]] = {}
     for m in scheduled:
         if only_missing and m.id in existing_recent_mids:
             continue
-        for tname, pref_home in ((m.home_team, True), (m.away_team, False)):
+        ctx = ctx_by_mid.get(m.id)
+        h_empty = not ctx or not ctx.home_form or ctx.home_form in ("[]", "null")
+        a_empty = not ctx or not ctx.away_form or ctx.away_form in ("[]", "null")
+        for tname, pref_home, is_empty in ((m.home_team, True, h_empty), (m.away_team, False, a_empty)):
             nk = normalize_team_name(tname)
-            if not nk or nk in cached_results or nk in team_tasks:
+            if not nk or nk in cached_results or nk in missing_tasks or nk in other_tasks:
                 continue
-            team_tasks[nk] = (tname, m.start_time_utc, pref_home)
+            if is_empty:
+                missing_tasks[nk] = (tname, m.start_time_utc, pref_home)
+            elif not only_missing:
+                other_tasks[nk] = (tname, m.start_time_utc, pref_home)
+
+    team_tasks: dict[str, tuple[str, datetime, Optional[bool]]] = {**missing_tasks, **other_tasks}
 
     if not team_tasks and only_missing:
         return {
@@ -807,12 +822,6 @@ def refresh_all_active_forms(
     covered_teams: set[str] = set()
     all_teams: set[str] = set()
 
-    # Bulk-load MatchContext rows in 1 SQL query
-    ctx_by_mid = {
-        c.match_id: c
-        for c in db.query(MatchContext).filter(MatchContext.match_id.in_([m.id for m in scheduled])).all()
-    }
-
     for m in scheduled:
         hk = normalize_team_name(m.home_team)
         ak = normalize_team_name(m.away_team)
@@ -821,7 +830,7 @@ def refresh_all_active_forms(
 
         h_res = results_by_norm.get(hk)
         a_res = results_by_norm.get(ak)
-        if not force_refresh and (h_res is None or a_res is None):
+        if not force_refresh and h_res is None and a_res is None:
             continue
 
         ctx = ctx_by_mid.get(m.id)
