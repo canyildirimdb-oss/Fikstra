@@ -683,6 +683,7 @@ export function HighlightsPage({
                         market_key: item.market_key,
                         selection_key: item.selection_key,
                         iddaa_odd: item.iddaa_odd,
+                        model_prob: item.breakdown?.blended_prob_pct ?? item.breakdown?.true_prob_pct ?? null,
                         start_time_utc: item.start_time_utc,
                       });
                     }}

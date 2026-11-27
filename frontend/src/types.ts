@@ -214,6 +214,7 @@ export interface CouponItemData {
   selection_key: string;
   iddaa_odd: number;
   confidence_score: number;
+  leg_probability?: number | null;
   status: string;
   match_status?: string;
   home_score?: number | null;
@@ -227,6 +228,8 @@ export interface CouponData {
   tier: "BANKO" | "DENGELI" | "SURPRIZ";
   total_odd: number;
   avg_confidence: number;
+  combined_probability?: number | null;
+  settlement_label?: string | null;
   status: string;
   is_locked?: boolean;
   items: CouponItemData[];
@@ -336,6 +339,7 @@ export interface CustomSlipItem {
   market_key: string;
   selection_key: string;
   iddaa_odd: number;
+  model_prob?: number | null;
   start_time_utc?: string;
 }
 

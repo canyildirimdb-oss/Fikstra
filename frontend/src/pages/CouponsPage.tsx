@@ -7,6 +7,7 @@ import { TeamBadge } from "../components/TeamBadge";
 import type { CouponData, CustomSlipItem, PredictionStatusItem, SavedSlip } from "../types";
 import type { ShareCouponPayload } from "../utils/couponShare";
 import { formatMarketLabel } from "../utils/format";
+import { analyzeSlipRisk } from "../utils/slipRisk";
 
 interface Props {
   subTab?: "active" | "history" | "sportoto" | "tracked";
@@ -35,19 +36,19 @@ const TIER_META: Record<
 > = {
   BANKO: {
     title: "Banko Kupon",
-    subtitle: "En yüksek güven • 1.30–1.85 oran bandı",
+    subtitle: "Dinamik 2–3 maç · 1.20–1.58 oran · en yüksek olasılık",
     badge: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
     icon: ShieldCheck,
   },
   DENGELI: {
     title: "Dengeli Kupon",
-    subtitle: "Güven & oran dengesi • 1.45–2.30 bandı",
+    subtitle: "Dinamik 2–3 maç · 1.42–2.10 oran · ≥%20 kombine",
     badge: "bg-cyan-500/15 text-cyan-400 border-cyan-500/30",
     icon: Layers,
   },
   SURPRIZ: {
     title: "Sürpriz Değer Kuponu",
-    subtitle: "Değerli global fark & düşüş • 1.90–3.60",
+    subtitle: "Dinamik 2–3 maç · 1.85–3.50 oran · yüksek değer",
     badge: "bg-amber-500/15 text-amber-400 border-amber-500/30",
     icon: Sparkles,
   },
@@ -143,6 +144,7 @@ export function CouponsPage({
   }, [subTab, trackedPredIds, refreshTrigger]);
 
   const customTotalOdd = Math.round(slipItems.reduce((acc, x) => acc * x.iddaa_odd, 1) * 100) / 100;
+  const slipRisk = useMemo(() => analyzeSlipRisk(slipItems), [slipItems]);
 
   const openCustomShare = () => {
     const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Istanbul" });
@@ -354,10 +356,23 @@ export function CouponsPage({
       {/* Custom User Slip */}
       {subTab === "active" && slipItems.length > 0 && (
         <div className="p-4 rounded-2xl glass-card border-[#00FF85]/40 neon-bottom-glow space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <div>
-              <h3 className="text-sm font-bold text-[#00FF85]">Kendi Özel Kuponum</h3>
-              <p className="text-[11px] text-slate-400">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-sm font-bold text-[#00FF85]">Kendi Özel Kuponum</h3>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border mono-nums ${
+                    slipRisk.riskTone === "emerald"
+                      ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/35"
+                      : slipRisk.riskTone === "amber"
+                      ? "bg-amber-500/15 text-amber-300 border-amber-500/35"
+                      : "bg-rose-500/15 text-rose-300 border-rose-500/35"
+                  }`}
+                >
+                  {slipRisk.riskLabel} · %{slipRisk.combinedPct}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">
                 {slipItems.length} maç seçildi • Toplam Oran:{" "}
                 <span className="font-extrabold text-white mono-nums">
                   {customTotalOdd.toFixed(2)}
@@ -427,6 +442,30 @@ export function CouponsPage({
             stake={stake}
             onChangeStake={onChangeStake}
           />
+
+          {slipRisk.weakestItem &&
+            slipRisk.weakestPct !== null &&
+            slipRisk.withoutWeakestPct !== null && (
+              <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/25 text-[11px] text-amber-200">
+                <span className="truncate">
+                  En riskli bacak:{" "}
+                  <strong className="text-white">
+                    {slipRisk.weakestItem.home_team} - {slipRisk.weakestItem.away_team}
+                  </strong>{" "}
+                  <span className="mono-nums">(%{slipRisk.weakestPct})</span> · Çıkarırsan ihtimal{" "}
+                  <span className="mono-nums font-bold text-emerald-300">
+                    %{slipRisk.combinedPct} → %{slipRisk.withoutWeakestPct}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onRemoveSlipItem(slipRisk.weakestItem!.match_id)}
+                  className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-rose-500/25 text-amber-100 hover:text-rose-200 font-bold shrink-0 text-[10px]"
+                >
+                  Çıkar
+                </button>
+              </div>
+            )}
         </div>
       )}
 
@@ -565,6 +604,11 @@ export function CouponsPage({
                         </p>
                       )}
                       <p className="text-[11px] text-slate-400 mt-1.5">{meta.subtitle}</p>
+                      {c.settlement_label && (
+                        <p className="text-[10px] text-emerald-300/80 font-medium mt-0.5">
+                          {c.settlement_label}
+                        </p>
+                      )}
                     </div>
                     <div className="text-right">
                       <span className="text-[10px] text-slate-400 block">Toplam</span>
@@ -639,6 +683,11 @@ export function CouponsPage({
                             <span className="text-slate-400 text-[10px]">
                               G:{Math.round(it.confidence_score)}
                             </span>
+                            {it.leg_probability != null && (
+                              <span className="text-emerald-300/90 text-[10px] font-semibold">
+                                %{Math.round(it.leg_probability)}
+                              </span>
+                            )}
                             <span className="px-2 py-0.5 rounded-md bg-white/[0.08] font-extrabold text-white">
                               {it.iddaa_odd.toFixed(2)}
                             </span>
@@ -652,6 +701,14 @@ export function CouponsPage({
                 <div className="pt-3 border-t border-[#1F2937] space-y-2">
                   <div className="flex items-center justify-between text-[11px] text-slate-400 mono-nums">
                     <span>Ort. Güven: {c.avg_confidence.toFixed(1)} / 100</span>
+                    {c.combined_probability != null && (
+                      <span>
+                        Kombine İhtimal:{" "}
+                        <strong className="text-emerald-300">
+                          %{c.combined_probability.toFixed(1)}
+                        </strong>
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     {(() => {
@@ -677,6 +734,7 @@ export function CouponsPage({
                                 market_key: it.market_key,
                                 selection_key: it.selection_key,
                                 iddaa_odd: it.iddaa_odd,
+                                model_prob: it.leg_probability ?? null,
                               }))
                             )
                           }

@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import math
 import threading
 import time
 from collections import defaultdict
@@ -34,6 +35,7 @@ from app.sportoto_engine import optimize_toto, serialize_sportoto_week
 from scrapers.iddaa import is_youth_or_women_match
 from services.ai_summary import generate_match_summary, sanitize_turkish_summary
 from services.analyzer import MAX_HIGHLIGHT_ODD, MIN_ODD_RULE
+from services.coupons import extract_leg_probability
 from services.sync import is_sync_running, run_sync_pipeline
 from utils.formatting import format_league_name_tr, format_pick_tr
 from utils.time_utils import is_tr_same_day, is_tr_today_or_next_24h, to_tr_datetime, tr_now, tr_today_str
@@ -623,11 +625,16 @@ def trigger_manual_refresh(
 
 def _serialize_coupon(c: Coupon, now_utc: datetime) -> dict:
     items_out = []
+    leg_probs: list[float] = []
+    m_starts: list[datetime] = []
     for item in c.items:
         p = item.prediction
         m = p.match
         m_start = m.start_time_utc.replace(tzinfo=timezone.utc) if m.start_time_utc.tzinfo is None else m.start_time_utc
+        m_starts.append(m_start)
         tr_dt = to_tr_datetime(m.start_time_utc)
+        leg_prob = extract_leg_probability(p)
+        leg_probs.append(leg_prob)
         if p.status in ("WON", "LOST", "VOID"):
             leg_res = p.status
         elif m.status == "LIVE" or (m.status == "SCHEDULED" and m_start <= now_utc):
@@ -649,18 +656,32 @@ def _serialize_coupon(c: Coupon, now_utc: datetime) -> dict:
             "selection_key": p.selection_key,
             "iddaa_odd": item.odd_at_pick if item.odd_at_pick is not None else p.iddaa_odd,
             "confidence_score": p.published_confidence if p.published_confidence is not None else p.confidence_score,
+            "leg_probability": round(leg_prob * 100.0, 1),
             "status": p.status,
             "match_status": m.status,
             "home_score": m.home_score,
             "away_score": m.away_score,
             "leg_result": leg_res,
         })
+    combined_probability = round(math.prod(leg_probs) * 100.0, 1) if leg_probs else None
+    if c.status in ("WON", "LOST"):
+        settlement_label = "Sonuçlandı"
+    elif m_starts:
+        last_start = max(m_starts)
+        if last_start <= now_utc + timedelta(hours=24):
+            settlement_label = "24 saat içinde sonuçlanır"
+        else:
+            settlement_label = f"Son maç {to_tr_datetime(last_start).strftime('%d.%m %H:%M')}"
+    else:
+        settlement_label = None
     return {
         "id": c.id,
         "coupon_date": c.coupon_date,
         "tier": c.tier,
         "total_odd": c.total_odd,
         "avg_confidence": c.avg_confidence,
+        "combined_probability": combined_probability,
+        "settlement_label": settlement_label,
         "status": c.status,
         "is_locked": bool(c.is_locked),
         "items": items_out,

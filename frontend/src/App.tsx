@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BarChart3,
@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { api } from "./api/client";
 import { formatMarketLabel } from "./utils/format";
+import { analyzeSlipRisk } from "./utils/slipRisk";
 import { ControlPanel } from "./components/ControlPanel";
 import { CouponShareModal } from "./components/CouponShareModal";
 import { MatchDetailDrawer } from "./components/MatchDetailDrawer";
@@ -513,6 +514,7 @@ export function App() {
   }, []);
 
   const customTotalOdd = Math.round(slipItems.reduce((acc, x) => acc * x.iddaa_odd, 1) * 100) / 100;
+  const slipRisk = useMemo(() => analyzeSlipRisk(slipItems), [slipItems]);
 
   const openSlipShare = () => {
     const todayStr = getTodayTrKey();
@@ -817,11 +819,22 @@ export function App() {
           <div className="max-w-3xl mx-auto pointer-events-auto p-3 rounded-2xl bg-[#080E18]/95 backdrop-blur-xl border border-[#00FF85]/45 shadow-2xl shadow-[#00FF85]/15 space-y-2">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 text-xs font-bold text-[#00FF85]">
+                <div className="flex items-center gap-2 text-xs font-bold text-[#00FF85] flex-wrap">
                   <Ticket className="w-3.5 h-3.5 shrink-0" />
                   <span>Kuponum Fişi ({slipItems.length} Maç)</span>
                   <span className="mono-nums px-2 py-0.5 rounded-md bg-[#00FF85]/20 text-[#00FF85]">
                     {customTotalOdd.toFixed(2)} Oran
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border mono-nums ${
+                      slipRisk.riskTone === "emerald"
+                        ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/35"
+                        : slipRisk.riskTone === "amber"
+                        ? "bg-amber-500/15 text-amber-300 border-amber-500/35"
+                        : "bg-rose-500/15 text-rose-300 border-rose-500/35"
+                    }`}
+                  >
+                    {slipRisk.riskLabel} · %{slipRisk.combinedPct}
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-300 truncate mt-0.5">
@@ -915,8 +928,21 @@ export function App() {
             >
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-sm font-extrabold text-[#00FF85]">Kuponum Fişi</h3>
-                  <p className="text-[11px] text-slate-400 mono-nums">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-sm font-extrabold text-[#00FF85]">Kuponum Fişi</h3>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border mono-nums ${
+                        slipRisk.riskTone === "emerald"
+                          ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/35"
+                          : slipRisk.riskTone === "amber"
+                          ? "bg-amber-500/15 text-amber-300 border-amber-500/35"
+                          : "bg-rose-500/15 text-rose-300 border-rose-500/35"
+                      }`}
+                    >
+                      {slipRisk.riskLabel} · %{slipRisk.combinedPct}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mono-nums mt-0.5">
                     {slipItems.length} maç • Toplam Oran: {customTotalOdd.toFixed(2)}
                   </p>
                 </div>
@@ -966,6 +992,30 @@ export function App() {
                 stake={stake}
                 onChangeStake={setStake}
               />
+
+              {slipRisk.weakestItem &&
+                slipRisk.weakestPct !== null &&
+                slipRisk.withoutWeakestPct !== null && (
+                  <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/25 text-[11px] text-amber-200">
+                    <span className="truncate">
+                      En riskli bacak:{" "}
+                      <strong className="text-white">
+                        {slipRisk.weakestItem.home_team} - {slipRisk.weakestItem.away_team}
+                      </strong>{" "}
+                      <span className="mono-nums">(%{slipRisk.weakestPct})</span> · Çıkarırsan{" "}
+                      <span className="mono-nums font-bold text-emerald-300">
+                        %{slipRisk.combinedPct} → %{slipRisk.withoutWeakestPct}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveSlipItem(slipRisk.weakestItem!.match_id)}
+                      className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-rose-500/25 text-amber-100 hover:text-rose-200 font-bold shrink-0 text-[10px]"
+                    >
+                      Çıkar
+                    </button>
+                  </div>
+                )}
 
               <div className="flex items-center gap-2 pt-2">
                 <button

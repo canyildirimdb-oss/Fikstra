@@ -1304,6 +1304,10 @@ export function MatchDetailDrawer({
                         market_key: activePick.market_key,
                         selection_key: activePick.selection_key,
                         iddaa_odd: activePick.iddaa_odd,
+                        model_prob:
+                          detail.top_prediction?.breakdown?.blended_prob_pct ??
+                          detail.top_prediction?.breakdown?.true_prob_pct ??
+                          null,
                         start_time_utc: detail.start_time_utc,
                       })
                     }
