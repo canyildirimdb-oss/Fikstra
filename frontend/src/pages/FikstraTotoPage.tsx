@@ -671,9 +671,10 @@ export function FikstraTotoPage({
                         {m.slot_no}
                       </span>
                       <div className="min-w-0 flex-1 space-y-1">
-                        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
-                          <p className="text-xs sm:text-sm font-bold text-slate-100 truncate">
-                            {m.home_team} - {m.away_team}
+                        <div className="flex items-center justify-between gap-2 min-w-0">
+                          <p className="text-xs sm:text-sm font-bold text-slate-100 truncate min-w-0 flex-1">
+                            {m.home_team.replace(/\s+A\.?\s*Ş\.?$/i, "").trim()} -{" "}
+                            {m.away_team.replace(/\s+A\.?\s*Ş\.?$/i, "").trim()}
                           </p>
                           {m.match_id && onSelectMatch && (
                             <button
@@ -727,8 +728,8 @@ export function FikstraTotoPage({
                           )}
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] mono-nums">
-                          <span className="text-slate-400">
+                        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] mono-nums">
+                          <span className="text-slate-400 whitespace-nowrap">
                             <span className={p1 === maxPct ? "font-extrabold text-slate-100" : ""}>
                               1: %{p1}
                             </span>
@@ -742,7 +743,7 @@ export function FikstraTotoPage({
                             </span>
                           </span>
                           {hasPublic && (
-                            <span className="text-[10px] text-slate-500">
+                            <span className="text-[10px] text-slate-500 whitespace-nowrap">
                               İddaa Halkı: 1:%{Math.round(m.public_pct_1!)} · X:%{Math.round(m.public_pct_x!)} · 2:%{Math.round(m.public_pct_2!)}
                             </span>
                           )}

@@ -11,7 +11,8 @@ interface Props {
 
 export function StakeCalculator({ totalOdd, stake, onChangeStake, compact = false }: Props) {
   const safeStake = Number.isFinite(stake) && stake > 0 ? stake : 0;
-  const payout = safeStake * totalOdd;
+  const roundedOdd = Math.round(totalOdd * 100) / 100;
+  const payout = safeStake * roundedOdd;
   const formattedPayout = payout.toLocaleString("tr-TR", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,

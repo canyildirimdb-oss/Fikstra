@@ -130,61 +130,67 @@ export function PerformancePage({ refreshTrigger, onSelectMatch }: Props) {
       </div>
 
       {/* Top Metrics */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        <div className="p-4 rounded-2xl glass-card">
-          <p className="text-[11px] text-slate-400 flex items-center">
-            Oran Avantajı
-            <MetricInfo text="Tahmini yakaladığınız oranın maç başlama saatindeki kapanış oranına göre yüzde kaç daha avantajlı olduğunu gösterir." />
-          </p>
-          <p
-            className={`font-extrabold mono-nums text-cyan-400 mt-1 ${
-              data.avg_clv_pct !== null ? "text-xl sm:text-2xl" : "text-base sm:text-lg"
-            }`}
-          >
-            {data.avg_clv_pct !== null
-              ? `${data.avg_clv_pct > 0 ? "+" : data.avg_clv_pct < 0 ? "-" : ""}%${Math.abs(data.avg_clv_pct)}`
-              : "Bekleniyor"}
-          </p>
-          <p className="text-[10px] text-slate-500 mt-0.5">Kapanış oranına göre fark</p>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="p-4 rounded-2xl glass-card">
+            <p className="text-[11px] text-slate-400 flex items-center">
+              Oran Avantajı
+              <MetricInfo text="Tahmini yakaladığınız oranın maç başlama saatindeki kapanış oranına göre yüzde kaç daha avantajlı olduğunu gösterir." />
+            </p>
+            <p
+              className={`font-extrabold mono-nums text-cyan-400 mt-1 ${
+                data.avg_clv_pct !== null ? "text-xl sm:text-2xl" : "text-base sm:text-lg"
+              }`}
+            >
+              {data.avg_clv_pct !== null
+                ? `${data.avg_clv_pct > 0 ? "+" : data.avg_clv_pct < 0 ? "-" : ""}%${Math.abs(data.avg_clv_pct)}`
+                : "Bekleniyor"}
+            </p>
+            <p className="text-[10px] text-slate-500 mt-0.5">Kapanış oranına göre fark</p>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-[#131926] border border-[#1F2937]">
+            <p className="text-[11px] text-slate-400 flex items-center">
+              Tahmin Tutarlılığı
+              <MetricInfo text="Model olasılıklarının gerçek maç sonuçlarına yakınlığını ölçer; 0'a yaklaştıkça daha isabetlidir." />
+            </p>
+            <p className="text-xl sm:text-2xl font-extrabold mono-nums text-amber-400 mt-1">
+              {data.brier_score !== null ? data.brier_score.toFixed(3) : "—"}
+            </p>
+            <p className="text-[10px] text-slate-500 mt-0.5">0&apos;a yaklaştıkça daha isabetli</p>
+          </div>
         </div>
 
-        <div className="p-4 rounded-2xl bg-[#131926] border border-[#1F2937]">
-          <p className="text-[11px] text-slate-400 flex items-center">
-            Tahmin Tutarlılığı
-            <MetricInfo text="Model olasılıklarının gerçek maç sonuçlarına yakınlığını ölçer; 0'a yaklaştıkça daha isabetlidir." />
-          </p>
-          <p className="text-xl sm:text-2xl font-extrabold mono-nums text-amber-400 mt-1">
-            {data.brier_score !== null ? data.brier_score.toFixed(3) : "—"}
-          </p>
-          <p className="text-[10px] text-slate-500 mt-0.5">0&apos;a yaklaştıkça daha isabetli</p>
-        </div>
-
-        {(["BANKO", "DENGELI", "SURPRIZ"] as const).map((tier) => {
-          const st = data.coupon_tiers[tier] || { total: 0, won: 0, win_rate: null };
-          const lowSample = st.total < 10;
-          return (
-            <div key={tier} className="p-4 rounded-2xl bg-[#131926] border border-[#1F2937]">
-              <div className="flex items-center justify-between gap-1">
-                <p className="text-[11px] text-slate-400">{TIER_DISPLAY[tier]} Kupon</p>
-                {lowSample && (
-                  <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[9px] font-semibold">
-                    Az veri
-                  </span>
-                )}
+        <div className="grid grid-cols-3 gap-2 sm:gap-3">
+          {(["BANKO", "DENGELI", "SURPRIZ"] as const).map((tier) => {
+            const st = data.coupon_tiers[tier] || { total: 0, won: 0, win_rate: null };
+            const lowSample = st.total < 10;
+            return (
+              <div key={tier} className="p-3 sm:p-4 rounded-2xl bg-[#131926] border border-[#1F2937] min-w-0">
+                <div className="flex items-center justify-between gap-1">
+                  <p className="text-[10px] sm:text-[11px] text-slate-400 truncate">
+                    {TIER_DISPLAY[tier]} Kupon
+                  </p>
+                  {lowSample && (
+                    <span className="hidden sm:inline-block px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-[9px] font-semibold shrink-0">
+                      Az veri
+                    </span>
+                  )}
+                </div>
+                <p className="text-lg sm:text-2xl font-extrabold mono-nums text-cyan-400 mt-1">
+                  {lowSample
+                    ? `${st.won}/${st.total}`
+                    : st.win_rate !== null
+                    ? `%${st.win_rate}`
+                    : "—"}
+                </p>
+                <p className="text-[10px] text-slate-500 mt-0.5 truncate">
+                  {lowSample ? "Örneklem < 10" : `${st.won}/${st.total} tuttu`}
+                </p>
               </div>
-              <p className="text-2xl font-extrabold mono-nums text-cyan-400 mt-1">
-                {lowSample
-                  ? `${st.won}/${st.total}`
-                  : st.win_rate !== null
-                  ? `%${st.win_rate}`
-                  : "—"}
-              </p>
-              <p className="text-[10px] text-slate-500 mt-0.5">
-                {lowSample ? "Örneklem < 10 kupon" : `${st.won}/${st.total} tuttu`}
-              </p>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
 
       {/* Confidence Band Calibration Mini Table */}

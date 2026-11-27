@@ -34,3 +34,21 @@ def format_pick_tr(market_key: str, selection_key: str = "") -> str:
             return "KG Yok"
         return "Karşılıklı Gol"
     return f"{market_key} {selection_key}".strip()
+
+
+_LEAGUE_DISPLAY_OVERRIDES = {
+    "Meksika Primera Ligi, Açılış Playoffla": "Meksika Primera Ligi, Açılış Playoffları",
+    "Meksika ExpansionMX Lig,Açılış,Playoff": "Meksika Expansion MX Ligi, Açılış Playoff",
+}
+
+
+def format_league_name_tr(league: str | None) -> str:
+    """Fix İddaa's 38-char truncated league names for clean UI display."""
+    raw = (league or "").strip()
+    if not raw:
+        return "Diğer"
+    if raw in _LEAGUE_DISPLAY_OVERRIDES:
+        return _LEAGUE_DISPLAY_OVERRIDES[raw]
+    if raw.endswith(" Playoffla"):
+        return raw[:-10] + " Playoffları"
+    return raw

@@ -35,7 +35,7 @@ from scrapers.iddaa import is_youth_or_women_match
 from services.ai_summary import generate_match_summary, sanitize_turkish_summary
 from services.analyzer import MAX_HIGHLIGHT_ODD, MIN_ODD_RULE
 from services.sync import is_sync_running, run_sync_pipeline
-from utils.formatting import format_pick_tr
+from utils.formatting import format_league_name_tr, format_pick_tr
 from utils.time_utils import is_tr_same_day, is_tr_today_or_next_24h, to_tr_datetime, tr_now, tr_today_str
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -322,7 +322,7 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
             "prediction_id": p.id,
             "match_id": p.match_id,
             "match_name": f"{p.match.home_team} - {p.match.away_team}",
-            "league": p.match.league,
+            "league": format_league_name_tr(p.match.league),
             "market_key": p.market_key,
             "selection_key": p.selection_key,
             "iddaa_odd": p.published_odd if p.published_odd is not None else p.iddaa_odd,
@@ -436,7 +436,7 @@ def get_predictions(
             "prediction_id": p.id,
             "match_id": m.id,
             "iddaa_id": m.iddaa_id,
-            "league": m.league,
+            "league": format_league_name_tr(m.league),
             "country": m.country,
             "is_major_league": m.is_major_league,
             "home_team": m.home_team,
@@ -534,7 +534,7 @@ def get_match_detail(
     return {
         "match_id": m.id,
         "iddaa_id": m.iddaa_id,
-        "league": m.league,
+        "league": format_league_name_tr(m.league),
         "country": m.country,
         "is_major_league": m.is_major_league,
         "home_team": m.home_team,
@@ -637,7 +637,7 @@ def _serialize_coupon(c: Coupon, now_utc: datetime) -> dict:
         items_out.append({
             "prediction_id": p.id,
             "match_id": p.match_id,
-            "league": m.league,
+            "league": format_league_name_tr(m.league),
             "home_team": m.home_team,
             "away_team": m.away_team,
             "home_logo_url": m.home_logo_url,
@@ -850,7 +850,7 @@ def get_performance(db: Session = Depends(get_db)):
         {
             "prediction_id": p.id,
             "match_id": p.match_id,
-            "league": p.match.league,
+            "league": format_league_name_tr(p.match.league),
             "home_team": p.match.home_team,
             "away_team": p.match.away_team,
             "home_score": p.match.home_score,
@@ -970,7 +970,7 @@ def _compute_performance_breakdown(db: Session) -> dict[str, list[dict[str, Any]
     by_market: dict[str, dict[str, int]] = defaultdict(lambda: {"won": 0, "lost": 0, "void": 0})
 
     for p in rows:
-        lg = p.match.league or "Diğer"
+        lg = format_league_name_tr(p.match.league)
         mg = _market_group_label(p.market_key)
         st = (p.status or "").upper()
         for bucket in (by_league[lg], by_market[mg]):
@@ -1056,7 +1056,7 @@ def get_predictions_batch_status(
             "match_id": p.match_id,
             "home_team": m.home_team,
             "away_team": m.away_team,
-            "league": m.league,
+            "league": format_league_name_tr(m.league),
             "kickoff": m.start_time_utc.isoformat() if m.start_time_utc else None,
             "start_time_utc": m.start_time_utc.isoformat() if m.start_time_utc else None,
             "pick": _format_pick_short(p.market_key, p.selection_key),

@@ -35,13 +35,13 @@ const TIER_META: Record<
 > = {
   BANKO: {
     title: "Banko Kupon",
-    subtitle: "En yüksek güven • 1.30–1.55 oran bandı",
+    subtitle: "En yüksek güven • 1.30–1.85 oran bandı",
     badge: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
     icon: ShieldCheck,
   },
   DENGELI: {
     title: "Dengeli Kupon",
-    subtitle: "Güven & oran dengesi • 1.45–2.00 bandı",
+    subtitle: "Güven & oran dengesi • 1.45–2.30 bandı",
     badge: "bg-cyan-500/15 text-cyan-400 border-cyan-500/30",
     icon: Layers,
   },
@@ -142,7 +142,7 @@ export function CouponsPage({
     };
   }, [subTab, trackedPredIds, refreshTrigger]);
 
-  const customTotalOdd = slipItems.reduce((acc, x) => acc * x.iddaa_odd, 1);
+  const customTotalOdd = Math.round(slipItems.reduce((acc, x) => acc * x.iddaa_odd, 1) * 100) / 100;
 
   const openCustomShare = () => {
     const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Istanbul" });
@@ -654,26 +654,43 @@ export function CouponsPage({
                     <span>Ort. Güven: {c.avg_confidence.toFixed(1)} / 100</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onImportSlip(
-                          c.items.map((it) => ({
-                            match_id: it.match_id,
-                            prediction_id: it.prediction_id,
-                            home_team: it.home_team,
-                            away_team: it.away_team,
-                            market_key: it.market_key,
-                            selection_key: it.selection_key,
-                            iddaa_odd: it.iddaa_odd,
-                          }))
-                        )
-                      }
-                      className="flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-xl glass-card hover:border-[#00FF85]/45 text-xs font-bold text-slate-200"
-                    >
-                      <ArrowDownToLine className="w-3.5 h-3.5 text-[#00FF85]" />
-                      Kuponuma Aktar
-                    </button>
+                    {(() => {
+                      const hasStartedOrSettled =
+                        c.status !== "PENDING" ||
+                        c.items.some(
+                          (it) =>
+                            (it.leg_result && it.leg_result !== "PENDING") ||
+                            (it.match_status && it.match_status !== "SCHEDULED")
+                        );
+                      const transferBlocked = Boolean(c.is_locked) || hasStartedOrSettled;
+                      return (
+                        <button
+                          type="button"
+                          disabled={transferBlocked}
+                          onClick={() =>
+                            onImportSlip(
+                              c.items.map((it) => ({
+                                match_id: it.match_id,
+                                prediction_id: it.prediction_id,
+                                home_team: it.home_team,
+                                away_team: it.away_team,
+                                market_key: it.market_key,
+                                selection_key: it.selection_key,
+                                iddaa_odd: it.iddaa_odd,
+                              }))
+                            )
+                          }
+                          className="flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-xl glass-card hover:border-[#00FF85]/45 text-xs font-bold text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-white/10"
+                        >
+                          <ArrowDownToLine className="w-3.5 h-3.5 text-[#00FF85]" />
+                          {hasStartedOrSettled
+                            ? "Başlamış maç içeriyor"
+                            : c.is_locked
+                            ? "Kilitli kupon"
+                            : "Kuponuma Aktar"}
+                        </button>
+                      );
+                    })()}
                     <button
                       onClick={() =>
                         setSharePayload({

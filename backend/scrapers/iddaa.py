@@ -3,6 +3,8 @@ from typing import Any
 
 import httpx
 
+from utils.formatting import format_league_name_tr
+
 IDDAA_EVENTS_URL = "https://sportsbookv2.iddaa.com/sportsbook/events?st=1&type=0&version=0&live=true"
 IDDAA_COMPETITIONS_URL = "https://sportsbookv2.iddaa.com/sportsbook/competitions"
 
@@ -209,7 +211,8 @@ def fetch_iddaa_bulletin(timeout: float = 20.0) -> list[dict[str, Any]]:
 
         ev_id = str(ev.get("i"))
         comp_info = comp_map.get(int(ev.get("ci") or 0), {})
-        league_name = comp_info.get("n") or comp_info.get("sn") or "Diğer Lig"
+        raw_league = comp_info.get("n") or comp_info.get("sn") or "Diğer Lig"
+        league_name = format_league_name_tr(raw_league)
         country_code = comp_info.get("cid") or ""
 
         ts = ev.get("d")

@@ -917,6 +917,10 @@ def refresh_all_active_forms(
             )
 
     db.commit()
+
+    # Backfill missing team logos from FotMob date-based matches (0 Odds API credits)
+    logos_updated = _backfill_missing_logos_from_fotmob(db, scheduled)
+
     total_teams = len(all_teams)
     updated_teams = len(covered_teams)
     coverage_pct = round((updated_teams / total_teams) * 100.0, 1) if total_teams else 0.0
@@ -926,6 +930,71 @@ def refresh_all_active_forms(
         "total_teams": total_teams,
         "updated_teams": updated_teams,
         "coverage_pct": coverage_pct,
+        "logos_updated": logos_updated,
         "source_breakdown": source_breakdown,
         "elapsed_sec": round(_time.monotonic() - t0, 2),
     }
+
+
+def _backfill_missing_logos_from_fotmob(db: Session, matches: list[Match]) -> int:
+    """Populate missing home/away logos from FotMob public match schedule (0 Odds API credits)."""
+    from scrapers.external_data import fetch_fotmob_matches_for_dates
+    from utils.team_matcher import find_best_external_match
+
+    missing = [m for m in matches if not m.home_logo_url or not m.away_logo_url]
+    if not missing:
+        return 0
+
+    date_strs: list[str] = []
+    seen_dates: set[str] = set()
+    for m in missing:
+        if not m.start_time_utc:
+            continue
+        st = m.start_time_utc.replace(tzinfo=timezone.utc) if m.start_time_utc.tzinfo is None else m.start_time_utc
+        for delta in (-1, 0, 1):
+            ds = (st + timedelta(days=delta)).strftime("%Y%m%d")
+            if ds not in seen_dates:
+                seen_dates.add(ds)
+                date_strs.append(ds)
+        if len(date_strs) >= 6:
+            break
+
+    if not date_strs:
+        return 0
+
+    try:
+        fm_events = fetch_fotmob_matches_for_dates(date_strs, timeout=8.0)
+    except Exception:
+        return 0
+    if not fm_events:
+        return 0
+
+    updated = 0
+    for m in missing:
+        fm = find_best_external_match(
+            m.home_team,
+            m.away_team,
+            m.start_time_utc,
+            fm_events,
+            external_match_id=m.external_match_id if m.external_source == "fotmob" else None,
+            league_name=m.league,
+        )
+        if not fm:
+            continue
+        changed = False
+        if not m.home_logo_url and fm.get("home_logo_url"):
+            m.home_logo_url = fm["home_logo_url"]
+            changed = True
+        if not m.away_logo_url and fm.get("away_logo_url"):
+            m.away_logo_url = fm["away_logo_url"]
+            changed = True
+        if not m.external_match_id and fm.get("fotmob_id"):
+            m.external_source = "fotmob"
+            m.external_match_id = str(fm["fotmob_id"])
+            changed = True
+        if changed:
+            updated += 1
+
+    if updated:
+        db.commit()
+    return updated

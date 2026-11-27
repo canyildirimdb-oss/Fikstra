@@ -240,11 +240,11 @@ export function HighlightsPage({
     const bulletinText =
       analyzedToday !== null
         ? activeCouponsCount > 0
-          ? `Bugün ${analyzedToday} maç analiz edildi · ${activeCouponsCount} hazır kupon yayında`
-          : `Bugün ${analyzedToday} maç analiz edildi · Günün öne çıkanlarına göz at`
+          ? `${analyzedToday} analiz · ${activeCouponsCount} hazır kupon →`
+          : `${analyzedToday} analiz · Öne çıkanlara göz at →`
         : activeCouponsCount > 0
-        ? `${activeCouponsCount} hazır kupon yayında · Hemen incele`
-        : "Günün analizleri ve hazır kuponlarına göz at";
+        ? `${activeCouponsCount} hazır kupon yayında →`
+        : "Günün analizleri ve hazır kuponları →";
 
     return [
       ...announcementSlides,

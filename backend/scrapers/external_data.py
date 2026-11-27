@@ -365,12 +365,24 @@ def fetch_fotmob_matches_for_dates(dates_yyyymmdd: list[str], timeout: float = 1
 
                     hc = m.get("home") or {}
                     ac = m.get("away") or {}
+                    home_tid = str(hc.get("id") or "").strip()
+                    away_tid = str(ac.get("id") or "").strip()
                     results.append({
                         "external_id": f"fotmob:{fid}",
                         "fotmob_id": fid,
                         "league_name": league_name,
                         "home_team": str(hc.get("name") or hc.get("longName") or ""),
                         "away_team": str(ac.get("name") or ac.get("longName") or ""),
+                        "home_logo_url": (
+                            f"https://images.fotmob.com/image_resources/logo/teamlogo/{home_tid}.png"
+                            if home_tid.isdigit()
+                            else None
+                        ),
+                        "away_logo_url": (
+                            f"https://images.fotmob.com/image_resources/logo/teamlogo/{away_tid}.png"
+                            if away_tid.isdigit()
+                            else None
+                        ),
                         "start_time_utc": start_utc,
                         "completed": completed,
                         "state": state,

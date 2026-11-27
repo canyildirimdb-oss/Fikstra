@@ -512,7 +512,7 @@ export function App() {
     setSavedSlips((prev) => prev.filter((s) => s.id !== slipId));
   }, []);
 
-  const customTotalOdd = slipItems.reduce((acc, x) => acc * x.iddaa_odd, 1);
+  const customTotalOdd = Math.round(slipItems.reduce((acc, x) => acc * x.iddaa_odd, 1) * 100) / 100;
 
   const openSlipShare = () => {
     const todayStr = getTodayTrKey();
@@ -547,7 +547,7 @@ export function App() {
   }
 
   return (
-    <div className="min-h-screen text-slate-100 pb-[calc(8.5rem+env(safe-area-inset-bottom))] md:pb-16">
+    <div className="min-h-screen text-slate-100 pb-[calc(9.5rem+env(safe-area-inset-bottom))] md:pb-20">
       {/* Glassmorphic Neon Emerald Top Header */}
       <header className="sticky top-0 z-30 bg-[#05080D]/80 backdrop-blur-xl border-b border-emerald-500/15">
         <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between gap-3">
@@ -875,9 +875,9 @@ export function App() {
         </div>
       )}
 
-      {/* Mobile Slim Floating Mini Kupon Bar (above bottom nav) */}
-      {slipItems.length > 0 && (
-        <div className="md:hidden fixed bottom-[calc(4.9rem+env(safe-area-inset-bottom))] inset-x-3 z-30 pointer-events-none">
+      {/* Mobile Slim Floating Mini Kupon Bar (above bottom nav, hidden inside Kuponlar tab) */}
+      {slipItems.length > 0 && tab !== "coupons" && (
+        <div className="md:hidden fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom))] inset-x-3 z-30 pointer-events-none">
           <button
             type="button"
             onClick={() => setSlipSheetOpen(true)}
@@ -1012,9 +1012,9 @@ export function App() {
         )}
       </AnimatePresence>
 
-      {/* Mobile Floating Symmetric 4-Tab Bottom Navigation Dock */}
-      <nav className="md:hidden fixed bottom-[calc(0.75rem+env(safe-area-inset-bottom))] inset-x-2.5 z-40">
-        <div className="relative rounded-2xl bg-[#080E18]/92 backdrop-blur-2xl border border-emerald-500/20 shadow-[0_12px_35px_-10px_rgba(0,0,0,0.85)] px-1 py-1.5 grid grid-cols-4 items-center">
+      {/* Mobile Fixed Opaque Symmetric 4-Tab Bottom Navigation Dock */}
+      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-[#05080D] border-t border-emerald-500/20 shadow-[0_-10px_30px_-10px_rgba(0,0,0,0.9)] px-2 pt-1.5 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
+        <div className="relative grid grid-cols-4 items-center">
           {TABS.map((t) => {
             const Icon = t.icon;
             const active = tab === t.key;
