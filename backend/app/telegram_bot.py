@@ -96,6 +96,17 @@ def _tier_header(tier: str) -> str:
     return f"🎟️ <b>{html.escape(t)} KUPON</b>"
 
 
+def _tier_subtitle_v2(tier: str) -> str:
+    t = (tier or "").upper()
+    if t == "BANKO":
+        return "Dinamik 2–3 maç · 1.20–1.58 oran · en yüksek olasılık"
+    if t == "DENGELI":
+        return "Dinamik 2–3 maç · 1.42–2.10 oran · ≥%20 kombine"
+    if t == "SURPRIZ":
+        return "Dinamik 2–3 maç · 1.85–3.50 oran · yüksek değer"
+    return "Dinamik 2–3 maç"
+
+
 def _status_badge(status: str) -> str:
     s = (status or "").upper()
     if s == "WON":
@@ -278,6 +289,10 @@ def dispatch_daily_chat_poll(db: Session) -> dict[str, Any]:
 
 
 def _render_coupon_message(coupon: Coupon) -> tuple[str, dict[str, Any]]:
+    import math
+    from services.coupons import extract_leg_probability
+    from utils.time_utils import to_tr_datetime
+
     lock_tag = "🔒 Kilitlendi" if coupon.is_locked else "🟢 Aktif"
     date_str = coupon.coupon_date
     try:
@@ -287,10 +302,6 @@ def _render_coupon_message(coupon: Coupon) -> tuple[str, dict[str, Any]]:
     except Exception:
         pass
 
-    lines = [
-        f"{_tier_header(coupon.tier)} · <code>{html.escape(date_str)}</code> · {lock_tag}",
-        "",
-    ]
     sorted_items = sorted(
         coupon.items,
         key=lambda it: (
@@ -299,22 +310,58 @@ def _render_coupon_message(coupon: Coupon) -> tuple[str, dict[str, Any]]:
             else datetime.max.replace(tzinfo=timezone.utc)
         ),
     )
+    leg_count = len([it for it in sorted_items if it.prediction and it.prediction.match])
+    lines = [
+        f"{_tier_header(coupon.tier)} ({leg_count} Maç) · <code>{html.escape(date_str)}</code> · {lock_tag}",
+        f"<i>{html.escape(_tier_subtitle_v2(coupon.tier))}</i>",
+        "",
+    ]
+
+    leg_probs: list[float] = []
+    m_starts: list[datetime] = []
+    now_utc = datetime.now(timezone.utc)
+
     for idx, item in enumerate(sorted_items, start=1):
         pred = item.prediction
         if not pred or not pred.match:
             continue
         m = pred.match
         odd_val = item.odd_at_pick or pred.published_odd or pred.iddaa_odd
+        conf_val = pred.published_confidence if pred.published_confidence is not None else pred.confidence_score
+        leg_prob = extract_leg_probability(pred)
+        leg_probs.append(leg_prob)
+        if m.start_time_utc:
+            st = m.start_time_utc.replace(tzinfo=timezone.utc) if m.start_time_utc.tzinfo is None else m.start_time_utc
+            m_starts.append(st)
         pick_lbl = _format_pick_label(pred.market_key, pred.selection_key, m.home_team, m.away_team)
         lines.append(
             f"{idx}. <b>{html.escape(m.home_team)} - {html.escape(m.away_team)}</b>\n"
-            f"   🕒 {_format_tr_dt(m.start_time_utc)} | 🎯 <b>{html.escape(pick_lbl)}</b> (<code>{odd_val:.2f}</code>)"
+            f"   🕒 {_format_tr_dt(m.start_time_utc)} | 🎯 <b>{html.escape(pick_lbl)}</b> (<code>{odd_val:.2f}</code>) · "
+            f"G:<b>%{conf_val:.0f}</b> · İhtimal:<b>%{leg_prob * 100.0:.0f}</b>"
         )
 
+    comb_prob_pct = round(math.prod(leg_probs) * 100.0, 1) if leg_probs else None
+    if coupon.status in ("WON", "LOST"):
+        settlement_label = "Sonuçlandı"
+    elif m_starts:
+        last_start = max(m_starts)
+        if last_start <= now_utc + timedelta(hours=24):
+            settlement_label = "24 saat içinde sonuçlanır"
+        else:
+            settlement_label = f"Son maç {to_tr_datetime(last_start).strftime('%d.%m %H:%M')}"
+    else:
+        settlement_label = None
+
     lines.append("")
-    lines.append(
-        f"📊 Toplam Oran: <b>{coupon.total_odd:.2f}</b> · Ort. Güven: <b>%{coupon.avg_confidence:.0f}</b>"
-    )
+    summary_parts = [
+        f"📊 Toplam Oran: <b>{coupon.total_odd:.2f}</b>",
+        f"Ort. Güven: <b>%{coupon.avg_confidence:.0f}</b>",
+    ]
+    if comb_prob_pct is not None:
+        summary_parts.append(f"Kombine İhtimal: <b>%{comb_prob_pct:.1f}</b>")
+    lines.append(" · ".join(summary_parts))
+    if settlement_label:
+        lines.append(f"⏳ {html.escape(settlement_label)}")
     return "\n".join(lines), _inline_link_markup("Fikstra'da İncele", "/?tab=coupons")
 
 

@@ -166,21 +166,32 @@ def _build_rule_based_summary(
         parts.append(base)
 
     if ctx and (ctx.home_form or ctx.away_form):
-        hf = form_to_turkish(json.loads(ctx.home_form)) if ctx.home_form else "Veri yok"
-        af = form_to_turkish(json.loads(ctx.away_form)) if ctx.away_form else "Veri yok"
+        h_raw = json.loads(ctx.home_form) if ctx.home_form else []
+        a_raw = json.loads(ctx.away_form) if ctx.away_form else []
+        hf = form_to_turkish(h_raw) if h_raw else "Veri yok"
+        af = form_to_turkish(a_raw) if a_raw else "Veri yok"
+        pts_map = {"W": 3, "G": 3, "D": 1, "B": 1, "L": 0, "M": 0}
+        h_pts = sum(pts_map.get(str(x).upper(), 0) for x in h_raw) if h_raw else None
+        a_pts = sum(pts_map.get(str(x).upper(), 0) for x in a_raw) if a_raw else None
+        h_ppg = (h_pts / len(h_raw)) if (h_pts is not None and h_raw) else None
+        a_ppg = (a_pts / len(a_raw)) if (a_pts is not None and a_raw) else None
         h5_avg, h5_cnt = _compute_exact_5m_goal_avg(db, match.id, "home")
         a5_avg, a5_cnt = _compute_exact_5m_goal_avg(db, match.id, "away")
         if h5_avg is not None and a5_avg is not None and h5_cnt > 0 and a5_cnt > 0:
+            h_pts_str = f"{h_ppg:.2f} puan/maç, " if h_ppg is not None else ""
+            a_pts_str = f"{a_ppg:.2f} puan/maç, " if a_ppg is not None else ""
             parts.append(
-                f"Son {h5_cnt} maç formunda ev sahibi {hf} ({h5_avg:.1f} gol ort.), "
-                f"deplasman ekibi {af} ({a5_avg:.1f} gol ort.) grafiğine sahip."
+                f"Son {h5_cnt} maç formunda ev sahibi {hf} ({h_pts_str}{h5_avg:.2f} gol ort.), "
+                f"deplasman ekibi {af} ({a_pts_str}{a5_avg:.2f} gol ort.) grafiğine sahip."
             )
         else:
             h_g = f"{ctx.home_goals_avg:.2f}" if ctx.home_goals_avg is not None else "-"
             a_g = f"{ctx.away_goals_avg:.2f}" if ctx.away_goals_avg is not None else "-"
+            h_pts_str = f"{h_ppg:.2f} puan/maç, " if h_ppg is not None else ""
+            a_pts_str = f"{a_ppg:.2f} puan/maç, " if a_ppg is not None else ""
             parts.append(
-                f"Son 5 maç formunda ev sahibi {hf} (sezon genelinde {h_g} gol ort.), "
-                f"deplasman ekibi {af} (sezon genelinde {a_g} gol ort.) grafiğine sahip."
+                f"Son 5 maç formunda ev sahibi {hf} ({h_pts_str}sezon genelinde {h_g} gol ort.), "
+                f"deplasman ekibi {af} ({a_pts_str}sezon genelinde {a_g} gol ort.) grafiğine sahip."
             )
 
     if ctx and ctx.injuries_json:
@@ -255,28 +266,38 @@ def generate_match_summary(
                     time.sleep(_MIN_INTERVAL_SEC - elapsed)
 
         if not gemini_failed:
-            hf = form_to_turkish(json.loads(ctx.home_form)) if ctx.home_form else ""
-            af = form_to_turkish(json.loads(ctx.away_form)) if ctx.away_form else ""
+            h_raw = json.loads(ctx.home_form) if ctx.home_form else []
+            a_raw = json.loads(ctx.away_form) if ctx.away_form else []
+            hf = form_to_turkish(h_raw) if h_raw else ""
+            af = form_to_turkish(a_raw) if a_raw else ""
+            pts_map = {"W": 3, "G": 3, "D": 1, "B": 1, "L": 0, "M": 0}
+            h_pts = sum(pts_map.get(str(x).upper(), 0) for x in h_raw) if h_raw else None
+            a_pts = sum(pts_map.get(str(x).upper(), 0) for x in a_raw) if a_raw else None
+            h_ppg = (h_pts / len(h_raw)) if (h_pts is not None and h_raw) else None
+            a_ppg = (a_pts / len(a_raw)) if (a_pts is not None and a_raw) else None
             inj = json.loads(ctx.injuries_json) if ctx.injuries_json else {}
             h_inj_list = [x["player"] for x in (inj.get("home") or [])[:4]]
             a_inj_list = [x["player"] for x in (inj.get("away") or [])[:4]]
             h5_avg, h5_cnt = _compute_exact_5m_goal_avg(db, match.id, "home")
             a5_avg, a5_cnt = _compute_exact_5m_goal_avg(db, match.id, "away")
-            h_avg_lbl = f"Son {h5_cnt} maç ort: {h5_avg:.2f}" if h5_avg is not None else f"Sezon geneli ort: {ctx.home_goals_avg}"
-            a_avg_lbl = f"Son {a5_cnt} maç ort: {a5_avg:.2f}" if a5_avg is not None else f"Sezon geneli ort: {ctx.away_goals_avg}"
+            h_goal_lbl = f"Son {h5_cnt} maç gol ort: {h5_avg:.2f}" if h5_avg is not None else f"Sezon geneli gol ort: {ctx.home_goals_avg}"
+            a_goal_lbl = f"Son {a5_cnt} maç gol ort: {a5_avg:.2f}" if a5_avg is not None else f"Sezon geneli gol ort: {ctx.away_goals_avg}"
+            h_pts_lbl = f"{h_pts} puan ({h_ppg:.2f} puan/maç) | " if h_ppg is not None else ""
+            a_pts_lbl = f"{a_pts} puan ({a_ppg:.2f} puan/maç) | " if a_ppg is not None else ""
 
             prompt = (
                 "Sen uzman bir futbol veri analistisin. Yalnızca aşağıdaki GERÇEK verilere dayanarak "
                 "3-4 cümlelik net, klişesiz, akıcı Türkçe maç analizi yaz. Veri uydurma.\n"
                 "KURALLAR: Form harflerini SADECE Türkçe yaz (G=Galibiyet, B=Beraberlik, M=Mağlubiyet), asla W/D/L yazma. "
+                "Puan ortalaması (G=3, B=1, M=0) ile atılan gol ortalaması farklı metriklerdir; asla gol ortalamasını 'puan ortalaması' olarak yazma. "
                 "Eğer sezon geneli ortalama verildiyse 'son 5 maçta' deme, 'sezon genelinde' de. "
                 "Eksikler boşsa 'kadro sağlam' de ve asla 'eksiklere rağmen' yazma. Aynı cümlede iki kez 'rağmen' kullanma.\n"
                 f"Maç: {match.home_team} vs {match.away_team} ({match.league})\n"
                 f"Öne Çıkan Seçim: {top_pred.market_key if top_pred else '-'} {top_pred.selection_key if top_pred else '-'} "
                 f"| İddaa Oranı: {top_pred.iddaa_odd if top_pred else '-'} | Global Oran: {top_pred.global_odd if top_pred else '-'} "
                 f"| Güven Skoru: {top_pred.confidence_score if top_pred else '-'}/100\n"
-                f"Ev Son 5 Form (G/B/M): {hf or 'Yok'} ({h_avg_lbl})\n"
-                f"Dep Son 5 Form (G/B/M): {af or 'Yok'} ({a_avg_lbl})\n"
+                f"Ev Son 5 Form (G/B/M): {hf or 'Yok'} ({h_pts_lbl}{h_goal_lbl})\n"
+                f"Dep Son 5 Form (G/B/M): {af or 'Yok'} ({a_pts_lbl}{a_goal_lbl})\n"
                 f"Ev Eksikler: {h_inj_list or 'Yok (Kadro sağlam)'}\n"
                 f"Dep Eksikler: {a_inj_list or 'Yok (Kadro sağlam)'}\n"
             )

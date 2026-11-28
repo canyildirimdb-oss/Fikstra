@@ -365,7 +365,7 @@ def run_sync_pipeline(
                         injuries_payload["away"] = a_inj
                         tm_fresh_count += 1
 
-                # Global Multi-Source Form & Recent Matches (v4: 365Scores -> FotMob -> ESPN w/ cup-only guard)
+                # Global Multi-Source Form & Recent Matches (v5: country-isolated & team-id verified)
                 h_global = fetch_global_team_recent_matches(
                     match.home_team,
                     match_start_utc=match.start_time_utc,
@@ -373,6 +373,8 @@ def run_sync_pipeline(
                     team_espn_id=ext.get("home_espn_id"),
                     exclude_event_id=ext.get("espn_id"),
                     db=db,
+                    league=match.league,
+                    country=match.country,
                 )
                 a_global = fetch_global_team_recent_matches(
                     match.away_team,
@@ -381,6 +383,8 @@ def run_sync_pipeline(
                     team_espn_id=ext.get("away_espn_id"),
                     exclude_event_id=ext.get("espn_id"),
                     db=db,
+                    league=match.league,
+                    country=match.country,
                 )
 
                 h_form_val = h_global["form"] if h_global["form"] else details.get("home_form")
@@ -691,9 +695,16 @@ def refresh_all_active_forms(
     Refresh global recent matches & form for SCHEDULED matches using 0 Odds API credits.
     Bounded concurrency (max_workers=8) and per-team timeout (5.5s).
     """
+    import re as _re
     import time as _time
     from utils.cache import get_cached_json, set_cached_json
-    from utils.team_matcher import normalize_team_name
+    from utils.team_matcher import extract_country_context, normalize_team_name
+
+    def _extract_fotmob_id_from_logo(url: Optional[str]) -> Optional[str]:
+        if not url:
+            return None
+        m_id = _re.search(r"/teamlogo/(\d+)\.png", url)
+        return m_id.group(1) if m_id else None
 
     t0 = _time.monotonic()
     q = db.query(Match).filter(Match.status == "SCHEDULED")
@@ -712,22 +723,22 @@ def refresh_all_active_forms(
             "elapsed_sec": 0.0,
         }
 
-    # Bulk-load 2h global_team_recent:v4 cache in 1 SQL query
+    # Bulk-load 2h global_team_recent:v5 cache in 1 SQL query (country/ID isolated)
     now_utc = datetime.now(timezone.utc)
     cutoff_2h = now_utc - timedelta(hours=2)
     cached_results: dict[str, dict[str, Any]] = {}
     if not force_refresh:
-        for row in db.query(ScraperCache).filter(ScraperCache.cache_key.like("global_team_recent:v4:%")).all():
+        for row in db.query(ScraperCache).filter(ScraperCache.cache_key.like("global_team_recent:v5:%")).all():
             if not row.updated_at:
                 continue
             upd = row.updated_at.replace(tzinfo=timezone.utc) if row.updated_at.tzinfo is None else row.updated_at
             if upd < cutoff_2h:
                 continue
-            nk = row.cache_key.removeprefix("global_team_recent:v4:")
+            ck = row.cache_key.removeprefix("global_team_recent:v5:")
             try:
                 payload = json.loads(row.payload_json)
                 if isinstance(payload, dict) and payload.get("recent_matches"):
-                    cached_results[nk] = payload
+                    cached_results[ck] = payload
             except Exception:
                 pass
 
@@ -796,24 +807,33 @@ def refresh_all_active_forms(
 
     scheduled.sort(key=_match_priority)
 
-    missing_tasks: dict[str, tuple[str, datetime, Optional[bool]]] = {}
-    other_tasks: dict[str, tuple[str, datetime, Optional[bool]]] = {}
+    missing_tasks: dict[str, tuple[str, datetime, Optional[bool], str, str, Optional[str]]] = {}
+    other_tasks: dict[str, tuple[str, datetime, Optional[bool], str, str, Optional[str]]] = {}
     for m in scheduled:
         ctx = ctx_by_mid.get(m.id)
         h_empty = not ctx or not ctx.home_form or ctx.home_form in ("[]", "null")
         a_empty = not ctx or not ctx.away_form or ctx.away_form in ("[]", "null")
         if only_missing and m.id in existing_recent_mids and not h_empty and not a_empty:
             continue
-        for tname, pref_home, is_empty in ((m.home_team, True, h_empty), (m.away_team, False, a_empty)):
+        c_ctx = extract_country_context(m.league, m.country)
+        for tname, pref_home, is_empty, logo_url in (
+            (m.home_team, True, h_empty, m.home_logo_url),
+            (m.away_team, False, a_empty, m.away_logo_url),
+        ):
             nk = normalize_team_name(tname)
-            if not nk or nk in cached_results or nk in missing_tasks or nk in other_tasks:
+            if not nk:
+                continue
+            fm_tid = _extract_fotmob_id_from_logo(logo_url)
+            scope = f"fm:{fm_tid}" if fm_tid else c_ctx["cache_scope"]
+            iso_key = f"{nk}:{scope}"
+            if iso_key in cached_results or iso_key in missing_tasks or iso_key in other_tasks:
                 continue
             if is_empty:
-                missing_tasks[nk] = (tname, m.start_time_utc, pref_home)
+                missing_tasks[iso_key] = (tname, m.start_time_utc, pref_home, m.league, m.country, fm_tid)
             elif not only_missing:
-                other_tasks[nk] = (tname, m.start_time_utc, pref_home)
+                other_tasks[iso_key] = (tname, m.start_time_utc, pref_home, m.league, m.country, fm_tid)
 
-    team_tasks: dict[str, tuple[str, datetime, Optional[bool]]] = {**missing_tasks, **other_tasks}
+    team_tasks = {**missing_tasks, **other_tasks}
 
     if not team_tasks and only_missing:
         return {
@@ -826,8 +846,8 @@ def refresh_all_active_forms(
             "elapsed_sec": round(_time.monotonic() - t0, 2),
         }
 
-    def _fetch_team(item: tuple[str, tuple[str, datetime, Optional[bool]]]):
-        nk, (tname, dt_utc, pref_home) = item
+    def _fetch_team(item: tuple[str, tuple[str, datetime, Optional[bool], str, str, Optional[str]]]):
+        iso_key, (tname, dt_utc, pref_home, lg, ctry, fm_tid) = item
         try:
             res = fetch_global_team_recent_matches(
                 tname,
@@ -835,12 +855,15 @@ def refresh_all_active_forms(
                 prefer_home=pref_home,
                 db=None,  # thread-safe: avoid sharing SQLAlchemy session across threads
                 timeout=4.0,
+                league=lg,
+                country=ctry,
+                team_fotmob_id=fm_tid,
             )
-            return nk, res
+            return iso_key, res
         except Exception:
-            return nk, {"form": [], "recent_matches": [], "goals_avg": None, "conceded_avg": None, "rest_days": None, "source": None}
+            return iso_key, {"form": [], "recent_matches": [], "goals_avg": None, "conceded_avg": None, "rest_days": None, "source": None}
 
-    results_by_norm: dict[str, dict[str, Any]] = dict(cached_results)
+    results_by_iso: dict[str, dict[str, Any]] = dict(cached_results)
     batch_tasks = list(team_tasks.items())[:160]
     if batch_tasks:
         from concurrent.futures import TimeoutError as FuturesTimeoutError, as_completed
@@ -850,12 +873,12 @@ def refresh_all_active_forms(
         try:
             for fut in as_completed(future_map, timeout=25.0):
                 try:
-                    nk, res = fut.result()
+                    iso_key, res = fut.result()
                 except Exception:
                     continue
-                results_by_norm[nk] = res
+                results_by_iso[iso_key] = res
                 if res.get("recent_matches"):
-                    set_cached_json(db, f"global_team_recent:v4:{nk}", res)
+                    set_cached_json(db, f"global_team_recent:v5:{iso_key}", res)
         except FuturesTimeoutError:
             pass
         finally:
@@ -866,13 +889,18 @@ def refresh_all_active_forms(
     all_teams: set[str] = set()
 
     for m in scheduled:
-        hk = normalize_team_name(m.home_team)
-        ak = normalize_team_name(m.away_team)
+        c_ctx = extract_country_context(m.league, m.country)
+        hk_raw = normalize_team_name(m.home_team)
+        ak_raw = normalize_team_name(m.away_team)
+        h_fm = _extract_fotmob_id_from_logo(m.home_logo_url)
+        a_fm = _extract_fotmob_id_from_logo(m.away_logo_url)
+        hk = f"{hk_raw}:{'fm:' + h_fm if h_fm else c_ctx['cache_scope']}"
+        ak = f"{ak_raw}:{'fm:' + a_fm if a_fm else c_ctx['cache_scope']}"
         all_teams.add(hk)
         all_teams.add(ak)
 
-        h_res = results_by_norm.get(hk)
-        a_res = results_by_norm.get(ak)
+        h_res = results_by_iso.get(hk)
+        a_res = results_by_iso.get(ak)
         if not force_refresh and h_res is None and a_res is None:
             continue
 

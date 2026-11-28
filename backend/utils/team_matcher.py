@@ -375,3 +375,144 @@ def find_best_external_match(
             best = cand
 
     return best
+
+
+_LEAGUE_COUNTRY_MAP: tuple[tuple[tuple[str, ...], tuple[str, ...], set[str], str, set[str]], ...] = (
+    (("ispanya", "spain"), ("la liga", "laliga", "copa del rey"), {"ESP"}, "ESP", {"laliga", "la liga", "segunda", "copa del rey"}),
+    (("ingiltere", "england"), ("premier lig", "premier league", "championship", "fa cup", "efl"), {"ENG", "GBR"}, "ENG", {"premier league", "championship", "league one", "league two", "fa cup"}),
+    (("italya", "italy"), ("serie a", "serie b", "coppa italia"), {"ITA"}, "ITA", {"serie a", "serie b", "coppa italia"}),
+    (("almanya", "germany"), ("bundesliga", "dfb"), {"GER", "DEU"}, "GER", {"bundesliga", "2. bundesliga", "3. liga", "dfb"}),
+    (("fransa", "france"), ("ligue 1", "ligue 2", "coupe de france"), {"FRA"}, "FRA", {"ligue 1", "ligue 2"}),
+    (("turkiye", "turkey"), ("super lig", "1. lig", "1.lig", "turkiye kupasi"), {"TUR"}, "TUR", {"super lig", "1. lig", "tff"}),
+    (("hollanda", "netherlands"), ("eredivisie", "eerste divisie"), {"NED", "NLD"}, "NED", {"eredivisie", "eerste divisie"}),
+    (("portekiz", "portugal"), ("primeira liga", "liga portugal"), {"POR", "PRT"}, "POR", {"liga portugal", "primeira liga"}),
+    (("belcika", "belgium"), ("jupiler", "pro league", "challenger pro"), {"BEL"}, "BEL", {"first division", "pro league", "challenger"}),
+    (("iskocya", "scotland"), ("premiership",), {"SCO"}, "SCO", {"premiership", "championship"}),
+    (("avusturya", "austria"), (), {"AUT"}, "AUT", {"bundesliga", "2. liga"}),
+    (("isvicre", "switzerland"), (), {"SUI", "CHE"}, "SUI", {"super league", "challenge league"}),
+    (("yunanistan", "greece"), (), {"GRE", "GRC"}, "GRE", {"super league"}),
+    (("danimarka", "denmark"), ("superliga",), {"DEN", "DNK"}, "DEN", {"superliga"}),
+    (("norvec", "norway"), ("eliteserien",), {"NOR"}, "NOR", {"eliteserien"}),
+    (("isvec", "sweden"), ("allsvenskan",), {"SWE"}, "SWE", {"allsvenskan", "superettan"}),
+    (("polonya", "poland"), ("ekstraklasa",), {"POL"}, "POL", {"ekstraklasa"}),
+    (("rusya", "russia"), (), {"RUS"}, "RUS", {"premier league"}),
+    (("ekvador", "ecuador"), ("ligapro",), {"ECU"}, "ECU", {"ligapro", "serie a"}),
+    (("uruguay",), (), {"URU", "URY"}, "URU", {"primera division", "apertura", "clausura"}),
+    (("sili", "chile"), (), {"CHI", "CHL"}, "CHI", {"primera division"}),
+    (("arjantin", "argentina"), ("liga profesional",), {"ARG"}, "ARG", {"liga profesional", "primera nacional"}),
+    (("brezilya", "brazil"), ("brasileirao",), {"BRA"}, "BRA", {"serie a", "serie b"}),
+    (("abd", "usa"), ("mls",), {"USA"}, "USA", {"mls"}),
+    (("meksika", "mexico"), ("liga mx", "expansion mx"), {"MEX"}, "MEX", {"liga mx", "expansion"}),
+    (("kolombiya", "colombia"), (), {"COL"}, "COL", {"primera a"}),
+    (("japonya", "japan"), ("j1", "j2"), {"JPN"}, "JPN", {"j. league", "j1", "j2"}),
+    (("avustralya", "australia"), ("a-league", "a league"), {"AUS"}, "AUS", {"a-league"}),
+    (("suudi arabistan", "saudi"), (), {"KSA", "SAU"}, "KSA", {"saudi pro league"}),
+)
+
+_UEFA_COMP_TOKENS = (
+    "sampiyonlar ligi", "champions league", "avrupa ligi", "europa league",
+    "konferans ligi", "conference league", "uefa",
+)
+_NON_UEFA_COUNTRIES = {
+    "ECU", "URU", "URY", "CHI", "CHL", "ARG", "BRA", "USA", "MEX", "COL",
+    "PER", "PAR", "PRY", "BOL", "VEN", "JPN", "KOR", "CHN", "AUS", "SAU",
+    "KSA", "QAT", "ARE", "EGY", "MAR", "TUN", "ZAF", "RSA", "IND", "THA",
+}
+_FOREIGN_LEAGUE_HINTS = {
+    "ECU": ("ligapro", "ecuador"),
+    "URU": ("uruguay",),
+    "CHI": ("chile",),
+    "ARG": ("argentina", "liga profesional"),
+    "BRA": ("brasileirao", "brazil"),
+    "USA": ("mls", "major league soccer"),
+    "MEX": ("liga mx", "expansion mx"),
+}
+
+
+def extract_country_context(league_name: str, country_hint: str = "") -> dict[str, Any]:
+    raw_lg = (league_name or "").lower().translate(TURKISH_MAP)
+    raw_ct = (country_hint or "").lower().translate(TURKISH_MAP)
+    combined = f"{raw_ct} {raw_lg}".strip()
+
+    is_uefa = any(tok in combined for tok in _UEFA_COMP_TOKENS)
+    if is_uefa:
+        return {
+            "countries": set(),
+            "is_uefa": True,
+            "cache_scope": "UEFA",
+            "league_keywords": set(),
+        }
+
+    # Pass 1: Explicit country name match
+    for country_tokens, _league_tokens, codes, scope, kw in _LEAGUE_COUNTRY_MAP:
+        if any(t in combined for t in country_tokens):
+            return {
+                "countries": set(codes),
+                "is_uefa": False,
+                "cache_scope": scope,
+                "league_keywords": set(kw),
+            }
+
+    # Pass 2: League name fallback when country is omitted
+    for _country_tokens, league_tokens, codes, scope, kw in _LEAGUE_COUNTRY_MAP:
+        if league_tokens and any(t in combined for t in league_tokens):
+            return {
+                "countries": set(codes),
+                "is_uefa": False,
+                "cache_scope": scope,
+                "league_keywords": set(kw),
+            }
+
+    ct_up = (country_hint or "").strip().upper()
+    if len(ct_up) in (2, 3) and ct_up.isalpha():
+        return {
+            "countries": {ct_up},
+            "is_uefa": False,
+            "cache_scope": ct_up,
+            "league_keywords": set(),
+        }
+
+    norm_lg = normalize_team_name(league_name or "")
+    scope = norm_lg.replace(" ", "_")[:24] if norm_lg else "GLOBAL"
+    return {
+        "countries": set(),
+        "is_uefa": False,
+        "cache_scope": scope,
+        "league_keywords": set(),
+    }
+
+
+def is_country_compatible(
+    cand_country: str,
+    cand_league: str,
+    ctx: Optional[dict[str, Any]],
+) -> bool:
+    if not ctx:
+        return True
+    expected_countries: set[str] = ctx.get("countries") or set()
+    is_uefa: bool = bool(ctx.get("is_uefa"))
+    cc = (cand_country or "").strip().upper()
+    cl = (cand_league or "").lower().translate(TURKISH_MAP)
+
+    if cc:
+        if expected_countries:
+            return cc in expected_countries
+        if is_uefa and cc in _NON_UEFA_COUNTRIES:
+            return False
+
+    # League-name cross-check when country code is absent or ambiguous (e.g. Serie A Ecuador vs LaLiga)
+    if expected_countries:
+        for f_cc, hints in _FOREIGN_LEAGUE_HINTS.items():
+            if f_cc not in expected_countries and any(h in cl for h in hints):
+                return False
+        if "ESP" in expected_countries and cl.strip() in {"serie a", "mls", "ligapro"}:
+            return False
+        if "ITA" in expected_countries and ("mls" in cl or "ligapro" in cl):
+            return False
+
+    if is_uefa:
+        for hints in _FOREIGN_LEAGUE_HINTS.values():
+            if any(h in cl for h in hints):
+                return False
+
+    return True

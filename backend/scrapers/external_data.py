@@ -12,7 +12,14 @@ from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests
 from rapidfuzz import fuzz
 
-from utils.team_matcher import build_team_search_queries, normalize_team_name, strict_team_match_score
+from utils.team_matcher import (
+    build_team_search_queries,
+    extract_country_context,
+    is_country_compatible,
+    is_non_senior_men_team,
+    normalize_team_name,
+    strict_team_match_score,
+)
 from utils.time_utils import to_tr_datetime
 
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
@@ -1509,6 +1516,7 @@ def _fetch_365scores_team_records(
     client: httpx.Client,
     team_name: str,
     ref_utc: datetime,
+    country_ctx: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, Any]]:
     global _365_DEAD_UNTIL
     if time.monotonic() < _365_DEAD_UNTIL:
@@ -1530,7 +1538,12 @@ def _fetch_365scores_team_records(
                 if comp.get("sportId") not in (None, 1):
                     continue
                 cname = str(comp.get("name") or "")
-                sc = strict_team_match_score(team_name, cname, str(comp.get("competitionDisplayName") or ""))
+                comp_disp = str(comp.get("competitionDisplayName") or "")
+                if is_non_senior_men_team(cname, team_name, comp_disp):
+                    continue
+                if not is_country_compatible(str(comp.get("countryCode") or ""), comp_disp, country_ctx):
+                    continue
+                sc = strict_team_match_score(team_name, cname, comp_disp)
                 if sc >= 78.0 and sc > best_score:
                     best_score = sc
                     best_cid = str(comp.get("id") or "")
@@ -1609,43 +1622,77 @@ def _fetch_fotmob_team_records(
     client: httpx.Client,
     team_name: str,
     ref_utc: datetime,
+    team_id: Optional[str] = None,
+    country_ctx: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, Any]]:
-    queries = build_team_search_queries(team_name)
+    candidate_ids: list[str] = []
+    if team_id and str(team_id).strip().isdigit():
+        candidate_ids.append(str(team_id).strip())
+    else:
+        queries = build_team_search_queries(team_name)
+        scored_cands: list[tuple[float, str, str]] = []
+        seen_ids: set[str] = set()
+        expected_kw = (country_ctx or {}).get("league_keywords") or set()
+
+        for q in queries:
+            try:
+                rs = client.get(
+                    f"https://www.fotmob.com/api/data/search/suggest?term={quote_plus(q)}",
+                    timeout=4.5,
+                )
+                if rs.status_code != 200:
+                    continue
+                for grp in rs.json() or []:
+                    for sug in grp.get("suggestions") or []:
+                        if sug.get("type") != "team":
+                            continue
+                        tid = str(sug.get("id") or "").strip()
+                        if not tid or tid in seen_ids:
+                            continue
+                        cname = str(sug.get("name") or "")
+                        lname = str(sug.get("leagueName") or "")
+                        if is_non_senior_men_team(cname, team_name, lname):
+                            continue
+                        if not is_country_compatible(str(sug.get("countryCode") or sug.get("ccode") or ""), lname, country_ctx):
+                            continue
+                        sc = strict_team_match_score(team_name, cname, lname)
+                        if sc >= 78.0:
+                            bonus = 5.0 if (expected_kw and any(k in lname.lower() for k in expected_kw)) else 0.0
+                            seen_ids.add(tid)
+                            scored_cands.append((sc + bonus, tid, lname))
+                if scored_cands:
+                    break
+            except Exception:
+                continue
+
+        scored_cands.sort(key=lambda x: x[0], reverse=True)
+        candidate_ids = [tid for _, tid, _ in scored_cands[:5]]
+
+    if not candidate_ids:
+        return []
 
     best_tid: Optional[str] = None
-    best_score = 0.0
-    for q in queries:
+    fixtures: list[dict[str, Any]] = []
+    for cid in candidate_ids:
         try:
-            rs = client.get(
-                f"https://www.fotmob.com/api/data/search/suggest?term={quote_plus(q)}",
-                timeout=4.5,
-            )
-            if rs.status_code != 200:
+            rt = client.get(f"https://www.fotmob.com/api/data/teams?id={cid}", timeout=5.0)
+            if rt.status_code != 200:
                 continue
-            for grp in rs.json() or []:
-                for sug in grp.get("suggestions") or []:
-                    if sug.get("type") != "team":
-                        continue
-                    cname = str(sug.get("name") or "")
-                    lname = str(sug.get("leagueName") or "")
-                    sc = strict_team_match_score(team_name, cname, lname)
-                    if sc >= 78.0 and sc > best_score:
-                        best_score = sc
-                        best_tid = str(sug.get("id") or "")
-            if best_tid:
+            tdata = rt.json()
+            details = tdata.get("details") or {}
+            cand_country = str(details.get("country") or details.get("ccode") or "")
+            cand_league = str(details.get("leagueName") or "")
+            if not team_id and not is_country_compatible(cand_country, cand_league, country_ctx):
+                continue
+            cand_fixtures = ((tdata.get("fixtures") or {}).get("allFixtures") or {}).get("fixtures") or []
+            if cand_fixtures:
+                best_tid = cid
+                fixtures = cand_fixtures
                 break
         except Exception:
             continue
 
     if not best_tid:
-        return []
-
-    try:
-        rt = client.get(f"https://www.fotmob.com/api/data/teams?id={best_tid}", timeout=5.0)
-        if rt.status_code != 200:
-            return []
-        fixtures = ((rt.json().get("fixtures") or {}).get("allFixtures") or {}).get("fixtures") or []
-    except Exception:
         return []
 
     records: list[dict[str, Any]] = []
@@ -1775,11 +1822,14 @@ def fetch_global_team_recent_matches(
     exclude_event_id: Optional[str] = None,
     db: Any = None,
     timeout: float = 5.5,
+    league: str = "",
+    country: str = "",
+    team_fotmob_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Global multi-source recent matches fetcher:
-    1) 365Scores Web JSON
-    2) FotMob Web JSON
+    1) FotMob Web JSON (direct team_id if known, else country-verified search)
+    2) 365Scores Web JSON (country-verified)
     3) ESPN Schedule (last resort, only if not cup-only or stale >20d)
     """
     now_utc = datetime.now(timezone.utc)
@@ -1791,8 +1841,10 @@ def fetch_global_team_recent_matches(
     if ref_utc > now_utc:
         ref_utc = now_utc
 
+    country_ctx = extract_country_context(league, country)
     norm_key = normalize_team_name(team_name)
-    cache_key = f"global_team_recent:v4:{norm_key}"
+    scope = f"fm:{team_fotmob_id}" if team_fotmob_id else country_ctx["cache_scope"]
+    cache_key = f"global_team_recent:v5:{norm_key}:{scope}"
     if db is not None and norm_key:
         from utils.cache import get_cached_json
         cached = get_cached_json(db, cache_key, ttl_hours=4.0)
@@ -1802,8 +1854,8 @@ def fetch_global_team_recent_matches(
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     with httpx.Client(timeout=httpx.Timeout(timeout, connect=2.5), headers=headers) as client:
         sources: list[tuple[str, Any]] = [
-            ("fotmob", lambda: _fetch_fotmob_team_records(client, team_name, ref_utc)),
-            ("365scores", lambda: _fetch_365scores_team_records(client, team_name, ref_utc)),
+            ("fotmob", lambda: _fetch_fotmob_team_records(client, team_name, ref_utc, team_id=team_fotmob_id, country_ctx=country_ctx)),
+            ("365scores", lambda: _fetch_365scores_team_records(client, team_name, ref_utc, country_ctx=country_ctx)),
         ]
         if team_espn_id:
             sources.append(
