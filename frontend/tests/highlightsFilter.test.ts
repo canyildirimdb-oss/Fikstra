@@ -12,6 +12,7 @@ import {
   getMarketRadarItems,
   getUpcomingSoonItems,
   resolveLeagueVisual,
+  getBackedTeamSide,
 } from "../src/utils/highlightsFilter.ts";
 
 function makePred(overrides: Partial<PredictionItem> = {}): PredictionItem {
@@ -201,4 +202,15 @@ test("league visual resolves major FotMob logo and deterministic shield fallback
 test("formatSyncTimeTr formats UTC ISO string in Europe/Istanbul HH:MM", () => {
   assert.equal(formatSyncTimeTr("2026-11-28T00:17:55+00:00"), "03:17");
   assert.equal(formatSyncTimeTr(null), null);
+});
+
+test("getBackedTeamSide detects HOME, AWAY and NEUTRAL picks", () => {
+  assert.equal(getBackedTeamSide("MS", "1"), "HOME");
+  assert.equal(getBackedTeamSide("MS", "2"), "AWAY");
+  assert.equal(getBackedTeamSide("MS", "X"), "NEUTRAL");
+  assert.equal(getBackedTeamSide("CS", "1X"), "HOME");
+  assert.equal(getBackedTeamSide("CS", "X2"), "AWAY");
+  assert.equal(getBackedTeamSide("CS", "12"), "NEUTRAL");
+  assert.equal(getBackedTeamSide("AU_25", "UST"), "NEUTRAL");
+  assert.equal(getBackedTeamSide("KG", "VAR"), "NEUTRAL");
 });

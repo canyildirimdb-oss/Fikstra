@@ -35,6 +35,7 @@ import {
   DEFAULT_HIGHLIGHTS_FILTER,
   filterAndSortHighlights,
   formatHeroKickoffLabel,
+  getBackedTeamSide,
   getDynamicLeagues,
   getDynamicMarketChips,
   getEffectiveModelProb,
@@ -351,6 +352,31 @@ export function HighlightsPage({
     ? slipIds.has(`${heroItem.match_id}_${heroItem.market_key}_${heroItem.selection_key}`)
     : false;
   const heroProb = heroItem ? Math.round(getEffectiveModelProb(heroItem)) : 0;
+  const heroSide = heroItem ? getBackedTeamSide(heroItem.market_key, heroItem.selection_key) : "NEUTRAL";
+  const heroHomeNameCls =
+    heroSide === "HOME"
+      ? "text-white font-extrabold"
+      : heroSide === "AWAY"
+      ? "text-slate-400 font-medium"
+      : "text-white font-bold";
+  const heroAwayNameCls =
+    heroSide === "AWAY"
+      ? "text-white font-extrabold"
+      : heroSide === "HOME"
+      ? "text-slate-400 font-medium"
+      : "text-white font-bold";
+  const heroHomeLogoCls =
+    heroSide === "HOME"
+      ? "shrink-0 drop-shadow-[0_0_8px_rgba(16,185,129,0.45)]"
+      : heroSide === "AWAY"
+      ? "shrink-0 opacity-70"
+      : "shrink-0";
+  const heroAwayLogoCls =
+    heroSide === "AWAY"
+      ? "shrink-0 drop-shadow-[0_0_8px_rgba(16,185,129,0.45)]"
+      : heroSide === "HOME"
+      ? "shrink-0 opacity-70"
+      : "shrink-0";
 
   const resetFilters = () => setFilterState(DEFAULT_HIGHLIGHTS_FILTER);
 
@@ -358,7 +384,7 @@ export function HighlightsPage({
     <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px] lg:gap-6 lg:items-start">
       {/* Left Main Content Area (~68%) */}
       <div className="min-w-0 space-y-4">
-        {/* Hero Card: FİKSTRA'NIN TERCİHİ (ALWAYS visible & fixed from unfiltered main pool) */}
+        {/* Hero Card: EN YÜKSEK GÜVEN (ALWAYS visible & fixed from unfiltered main pool) */}
         {heroItem && (
           <div
             role="button"
@@ -370,21 +396,30 @@ export function HighlightsPage({
                 onSelectMatch(heroItem.match_id, heroItem.prediction_id);
               }
             }}
-            className="w-full text-left relative overflow-hidden rounded-2xl glass-card glass-card-hover neon-bottom-glow transition-all cursor-pointer flex items-stretch"
+            className="w-full text-left relative overflow-hidden rounded-2xl glass-card glass-card-hover neon-bottom-glow !border-emerald-400/35 transition-all cursor-pointer flex items-stretch"
           >
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-emerald-400/80 to-transparent z-10"
+            />
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute -top-12 -right-12 w-40 h-40 rounded-full bg-emerald-500/10 blur-2xl"
+            />
+
             <LeagueLogoColumn
               name={heroItem.league}
               country={heroItem.country}
               logoUrl={heroItem.league_logo_url}
             />
 
-            <div className="flex-1 min-w-0 p-3 lg:p-6 space-y-2 lg:space-y-3.5">
+            <div className="flex-1 min-w-0 p-3 lg:p-6 space-y-2 lg:space-y-3.5 relative">
               {/* Top Row: Fixed Brand Title + Real TR Kickoff Time */}
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="inline-flex items-center gap-1.5 text-[11px] lg:text-xs font-extrabold text-[#00FF85] uppercase tracking-wider shrink-0">
                     <Flame className="w-3.5 h-3.5 lg:w-4 lg:h-4" />
-                    FİKSTRA&apos;NIN TERCİHİ
+                    EN YÜKSEK GÜVEN
                   </span>
                   <span className="hidden sm:inline text-xs text-slate-400 truncate">
                     · {heroItem.league}
@@ -398,15 +433,19 @@ export function HighlightsPage({
               {/* Mobile-only Full-Width Single-Line Matchup Row */}
               <div className="lg:hidden flex items-center gap-1.5 min-w-0">
                 <div className="flex items-center gap-1.5 min-w-0 shrink">
-                  <TeamBadge name={heroItem.home_team} logoUrl={heroItem.home_logo_url} size="sm" />
-                  <span className="text-[14px] font-extrabold text-white truncate">
+                  <span className={heroHomeLogoCls}>
+                    <TeamBadge name={heroItem.home_team} logoUrl={heroItem.home_logo_url} size="sm" />
+                  </span>
+                  <span className={`text-[14px] truncate ${heroHomeNameCls}`}>
                     {heroItem.home_team}
                   </span>
                 </div>
                 <span className="text-[11px] text-slate-500 font-bold shrink-0">vs</span>
                 <div className="flex items-center gap-1.5 min-w-0 shrink">
-                  <TeamBadge name={heroItem.away_team} logoUrl={heroItem.away_logo_url} size="sm" />
-                  <span className="text-[14px] font-extrabold text-white truncate">
+                  <span className={heroAwayLogoCls}>
+                    <TeamBadge name={heroItem.away_team} logoUrl={heroItem.away_logo_url} size="sm" />
+                  </span>
+                  <span className={`text-[14px] truncate ${heroAwayNameCls}`}>
                     {heroItem.away_team}
                   </span>
                 </div>
@@ -417,15 +456,19 @@ export function HighlightsPage({
                 <div className="min-w-0 flex-1 space-y-1.5 lg:space-y-3">
                   <div className="hidden lg:flex items-center gap-2.5 flex-wrap">
                     <div className="flex items-center gap-2 min-w-0">
-                      <TeamBadge name={heroItem.home_team} logoUrl={heroItem.home_logo_url} size="md" />
-                      <span className="text-sm sm:text-base lg:text-lg font-extrabold text-white truncate">
+                      <span className={heroHomeLogoCls}>
+                        <TeamBadge name={heroItem.home_team} logoUrl={heroItem.home_logo_url} size="md" />
+                      </span>
+                      <span className={`text-sm sm:text-base lg:text-lg truncate ${heroHomeNameCls}`}>
                         {heroItem.home_team}
                       </span>
                     </div>
                     <span className="text-xs lg:text-sm text-slate-500 font-bold">vs</span>
                     <div className="flex items-center gap-2 min-w-0">
-                      <TeamBadge name={heroItem.away_team} logoUrl={heroItem.away_logo_url} size="md" />
-                      <span className="text-sm sm:text-base lg:text-lg font-extrabold text-white truncate">
+                      <span className={heroAwayLogoCls}>
+                        <TeamBadge name={heroItem.away_team} logoUrl={heroItem.away_logo_url} size="md" />
+                      </span>
+                      <span className={`text-sm sm:text-base lg:text-lg truncate ${heroAwayNameCls}`}>
                         {heroItem.away_team}
                       </span>
                     </div>
@@ -433,7 +476,7 @@ export function HighlightsPage({
 
                   <div className="flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-1.5 lg:gap-2">
                     <div className="flex items-center gap-1.5 lg:contents flex-wrap">
-                      <span className="inline-flex items-center gap-1.5 lg:gap-2 px-2.5 py-1 lg:px-3.5 lg:py-1.5 rounded-full bg-[#00FF85]/15 border border-[#00FF85]/45 text-xs lg:text-sm font-bold text-[#00FF85] shadow-[0_0_12px_-4px_rgba(0,255,133,0.45)]">
+                      <span className="inline-flex items-center gap-1.5 lg:gap-2 px-2.5 py-1 lg:px-3.5 lg:py-1.5 rounded-full bg-gradient-to-r from-emerald-400 via-emerald-400 to-teal-300 text-xs lg:text-sm font-extrabold text-[#03120C] shadow-[0_0_20px_rgba(16,185,129,0.32)]">
                         <span>
                           {formatPickWithTeam(
                             heroItem.market_key,
@@ -442,13 +485,13 @@ export function HighlightsPage({
                             heroItem.away_team
                           )}
                         </span>
-                        <span className="mono-nums text-white font-extrabold">
+                        <span className="bg-[#03120C]/15 px-1.5 py-0.5 rounded-md font-mono font-black text-[#03120C] mono-nums">
                           {heroItem.iddaa_odd.toFixed(2)}
                         </span>
                       </span>
 
                       {heroProb > 0 && (
-                        <span className="px-2 py-0.5 lg:px-2.5 lg:py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-[11px] lg:text-xs font-bold mono-nums text-emerald-300">
+                        <span className="px-2 py-0.5 lg:px-2.5 lg:py-1 rounded-full border border-emerald-400/40 bg-emerald-500/15 text-[11px] lg:text-xs font-bold mono-nums text-emerald-200">
                           %{heroProb}
                         </span>
                       )}
@@ -467,11 +510,23 @@ export function HighlightsPage({
                   </div>
                 </div>
 
-                <div className="lg:hidden shrink-0">
-                  <ConfidenceRing score={heroItem.confidence_score} size={56} />
+                <div className="relative lg:hidden shrink-0">
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute -inset-2 rounded-full bg-emerald-500/15 blur-md"
+                  />
+                  <div className="relative">
+                    <ConfidenceRing score={heroItem.confidence_score} size={64} />
+                  </div>
                 </div>
-                <div className="hidden lg:block shrink-0">
-                  <ConfidenceRing score={heroItem.confidence_score} size={68} />
+                <div className="relative hidden lg:block shrink-0">
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute -inset-2 rounded-full bg-emerald-500/15 blur-md"
+                  />
+                  <div className="relative">
+                    <ConfidenceRing score={heroItem.confidence_score} size={68} />
+                  </div>
                 </div>
               </div>
 
@@ -486,7 +541,7 @@ export function HighlightsPage({
                   className={`inline-flex items-center gap-1.5 px-3 py-1 lg:px-3.5 lg:py-1.5 rounded-xl text-xs font-bold border transition-all ${
                     heroInSlip
                       ? "bg-[#00FF85] text-[#05080D] border-[#00FF85] shadow-[0_0_12px_rgba(0,255,133,0.45)]"
-                      : "bg-white/[0.04] text-slate-100 border-white/15 hover:border-[#00FF85]/60 hover:text-[#00FF85]"
+                      : "bg-white/[0.04] text-slate-100 border-emerald-500/30 hover:border-emerald-400/60 hover:text-[#00FF85]"
                   }`}
                 >
                   {heroInSlip ? <Check className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}

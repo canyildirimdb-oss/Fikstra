@@ -432,3 +432,21 @@ export function resolveLeagueVisual(
   const abbr = matched?.abbr ?? computeLeagueAbbr(cleanLeague);
   return { logoUrl, abbr, colorCls };
 }
+
+export type BackedTeamSide = "HOME" | "AWAY" | "NEUTRAL";
+
+export function getBackedTeamSide(marketKey: string, selectionKey: string): BackedTeamSide {
+  const m = (marketKey || "").toUpperCase();
+  const s = (selectionKey || "").toUpperCase();
+  if (m === "MS" || m === "IY_MS") {
+    if (s === "1") return "HOME";
+    if (s === "2") return "AWAY";
+    return "NEUTRAL";
+  }
+  if (m === "CS") {
+    if (s === "1X") return "HOME";
+    if (s === "X2") return "AWAY";
+    return "NEUTRAL";
+  }
+  return "NEUTRAL";
+}
