@@ -556,7 +556,8 @@ export function App() {
     );
   }
 
-  const containerMaxWidth = tab === "highlights" ? "max-w-[1440px]" : "max-w-5xl";
+  const containerMaxWidth =
+    tab === "highlights" ? "max-w-[1440px]" : tab === "performance" ? "max-w-6xl" : "max-w-5xl";
   const syncTimeLabel = formatSyncTimeTr(lastSyncAt ?? summary?.last_sync_at);
 
   return (
