@@ -30,6 +30,16 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  getHealth: () =>
+    requestJson<{
+      status: string;
+      brand?: string;
+      sync_running?: boolean;
+      last_sync_at: string | null;
+      last_sync_status?: string | null;
+      pending_coupons_count?: number;
+    }>("/api/health"),
+
   getSummary: () => requestJson<DashboardSummary>("/api/dashboard/summary"),
 
   getPredictions: (params: {

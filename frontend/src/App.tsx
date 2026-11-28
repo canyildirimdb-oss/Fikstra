@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { api } from "./api/client";
 import { formatMarketLabel } from "./utils/format";
+import { formatSyncTimeTr } from "./utils/highlightsFilter";
 import { analyzeSlipRisk } from "./utils/slipRisk";
 import { ControlPanel } from "./components/ControlPanel";
 import { CouponShareModal } from "./components/CouponShareModal";
@@ -124,6 +125,7 @@ export function App() {
   const [totoSlipParam, setTotoSlipParam] = useState<string | null>(initialUrlRef.current.totoSlip);
   const [notifOpen, setNotifOpen] = useState(false);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
   const [selectedMatch, setSelectedMatch] = useState<{
     matchId: number;
     predictionId?: number;
@@ -364,6 +366,12 @@ export function App() {
 
   const loadSummary = useCallback(() => {
     api.getSummary().then(setSummary).catch(() => {});
+    api
+      .getHealth()
+      .then((h) => {
+        if (h?.last_sync_at) setLastSyncAt(h.last_sync_at);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -548,11 +556,14 @@ export function App() {
     );
   }
 
+  const containerMaxWidth = tab === "highlights" ? "max-w-7xl" : "max-w-5xl";
+  const syncTimeLabel = formatSyncTimeTr(lastSyncAt ?? summary?.last_sync_at);
+
   return (
     <div className="min-h-screen text-slate-100 pb-[calc(9.5rem+env(safe-area-inset-bottom))] md:pb-20">
       {/* Glassmorphic Neon Emerald Top Header */}
       <header className="sticky top-0 z-30 bg-[#05080D]/80 backdrop-blur-xl border-b border-emerald-500/15">
-        <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between gap-3">
+        <div className={`${containerMaxWidth} mx-auto px-4 h-16 flex items-center justify-between gap-3`}>
           <div className="flex items-center gap-3">
             <img
               src="/logo-profile.png"
@@ -586,9 +597,11 @@ export function App() {
                 >
                   <Icon className="w-3.5 h-3.5" />
                   {t.badge ? (
-                    <span className="inline-flex items-center gap-1">
+                    <span className="inline-flex items-center gap-1.5">
                       <span className="toto-shimmer-text font-extrabold">{t.label}</span>
-                      <span className="text-[11px] font-extrabold text-[#00FF85]">({t.badge})</span>
+                      <span className="px-1.5 py-[1px] rounded-full bg-[#00FF85] text-[#05080D] text-[9px] font-extrabold leading-none shadow-[0_0_8px_rgba(0,255,133,0.45)]">
+                        {t.badge}
+                      </span>
                     </span>
                   ) : (
                     t.label
@@ -606,8 +619,17 @@ export function App() {
             })}
           </nav>
 
-          {/* Telegram Bridge + Circular Dark Glass Notification Action */}
+          {/* Live Freshness + Telegram Bridge + Circular Dark Glass Notification Action */}
           <div className="flex items-center gap-2 shrink-0">
+            {syncTimeLabel && (
+              <span
+                className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-[11px] font-bold mono-nums text-emerald-300"
+                title="Son canlı veri güncellemesi (TR saati)"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-[#00FF85] animate-pulse" />
+                Canlı · {syncTimeLabel}
+              </span>
+            )}
             <a
               href={TELEGRAM_INVITE_URL}
               target="_blank"
@@ -716,7 +738,7 @@ export function App() {
       )}
 
       {/* Main Content */}
-      <main className="max-w-5xl mx-auto px-4 pt-4">
+      <main className={`${containerMaxWidth} mx-auto px-4 pt-4`}>
         {tab === "highlights" && (
           <HighlightsPage
             summary={summary}
@@ -727,6 +749,13 @@ export function App() {
             telegramInviteUrl={TELEGRAM_INVITE_URL}
             slipItems={slipItems}
             onToggleSlip={handleToggleSlip}
+            stake={stake}
+            onChangeStake={setStake}
+            onRemoveSlipItem={handleRemoveSlipItem}
+            onClearSlip={handleClearSlip}
+            onSaveSlip={handleSaveSlip}
+            onCopySlipLink={handleCopySlipLink}
+            onShareSlip={openSlipShare}
             refreshTrigger={refreshTrigger}
           />
         )}
@@ -813,9 +842,13 @@ export function App() {
         )}
       </AnimatePresence>
 
-      {/* Desktop Floating Kuponum Fişi Bar (when not on Coupons tab) */}
+      {/* Desktop Floating Kuponum Fişi Bar (hidden on Coupons tab, and hidden on lg+ Highlights where right panel is shown) */}
       {slipItems.length > 0 && tab !== "coupons" && (
-        <div className="hidden md:block fixed bottom-4 inset-x-0 z-30 px-4 pointer-events-none">
+        <div
+          className={`hidden md:block ${
+            tab === "highlights" ? "lg:hidden" : ""
+          } fixed bottom-4 inset-x-0 z-30 px-4 pointer-events-none`}
+        >
           <div className="max-w-3xl mx-auto pointer-events-auto p-3 rounded-2xl bg-[#080E18]/95 backdrop-blur-xl border border-[#00FF85]/45 shadow-2xl shadow-[#00FF85]/15 space-y-2">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 flex-1">

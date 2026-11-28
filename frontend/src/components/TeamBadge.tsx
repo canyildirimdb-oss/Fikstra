@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { getTeamMonogram } from "../utils/format";
+import { resolveLeagueVisual } from "../utils/highlightsFilter";
 
 export function TeamBadge({
   name,
@@ -47,20 +48,75 @@ export function TeamBadge({
 export function LeagueBadge({
   name,
   logoUrl,
+  country,
 }: {
   name: string;
   logoUrl?: string | null;
+  country?: string | null;
 }) {
   const [imgFailed, setImgFailed] = useState(false);
-  if (!logoUrl || imgFailed) return null;
+  const visual = resolveLeagueVisual(name, country, logoUrl);
+  if (visual.logoUrl && !imgFailed) {
+    return (
+      <span className="inline-flex items-center justify-center w-5 h-5 rounded-md bg-white/[0.12] border border-white/15 p-0.5 shrink-0">
+        <img
+          src={visual.logoUrl}
+          alt={name}
+          loading="lazy"
+          onError={() => setImgFailed(true)}
+          className="w-full h-full object-contain drop-shadow-[0_1px_2px_rgba(255,255,255,0.25)]"
+        />
+      </span>
+    );
+  }
   return (
-    <img
-      src={logoUrl}
-      alt={name}
-      loading="lazy"
-      onError={() => setImgFailed(true)}
-      className="w-4 h-4 object-contain shrink-0 rounded-sm bg-white/5 p-0.5"
-    />
+    <span
+      className={`inline-flex items-center justify-center w-5 h-5 rounded-md bg-gradient-to-br border text-[8px] font-extrabold shrink-0 ${visual.colorCls}`}
+      title={name}
+    >
+      {visual.abbr.slice(0, 3)}
+    </span>
+  );
+}
+
+export function LeagueLogoColumn({
+  name,
+  logoUrl,
+  country,
+}: {
+  name: string;
+  logoUrl?: string | null;
+  country?: string | null;
+}) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const visual = resolveLeagueVisual(name, country, logoUrl);
+
+  return (
+    <div
+      className="w-12 shrink-0 flex flex-col items-center justify-center gap-1.5 bg-gradient-to-b from-white/[0.04] via-emerald-500/[0.04] to-white/[0.02] border-r border-white/[0.07] px-1.5 py-3"
+      title={name}
+    >
+      {visual.logoUrl && !imgFailed ? (
+        <div className="w-9 h-9 rounded-xl bg-white/[0.13] border border-white/20 shadow-[0_0_14px_-4px_rgba(255,255,255,0.28)] flex items-center justify-center p-1.5">
+          <img
+            src={visual.logoUrl}
+            alt={name}
+            loading="lazy"
+            onError={() => setImgFailed(true)}
+            className="w-full h-full object-contain drop-shadow-[0_1px_4px_rgba(255,255,255,0.3)]"
+          />
+        </div>
+      ) : (
+        <div
+          className={`w-9 h-9 rounded-xl bg-gradient-to-br border flex items-center justify-center text-[10px] font-extrabold tracking-tight shadow-inner ${visual.colorCls}`}
+        >
+          {visual.abbr}
+        </div>
+      )}
+      <span className="text-[8.5px] font-bold tracking-wider text-slate-400 uppercase leading-none">
+        {visual.abbr}
+      </span>
+    </div>
   );
 }
 

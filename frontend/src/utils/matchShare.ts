@@ -48,7 +48,7 @@ export function getMatchTopReasonChips(
     },
     {
       ratio: breakdown.injury / 15,
-      label: breakdown.injury_warning ? "Eksik Analizi" : "Kadro Sağlam",
+      label: breakdown.injury_warning ? "Kadro Avantajı" : "Kadro Sağlam",
     },
   ];
   candidates.sort((a, b) => b.ratio - a.ratio);
