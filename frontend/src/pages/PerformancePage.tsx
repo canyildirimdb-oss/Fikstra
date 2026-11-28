@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Award, ChevronDown, ChevronUp, Clock, Flame, TrendingUp, Trophy } from "lucide-react";
+import { Award, Clock, Flame, TrendingUp, Trophy } from "lucide-react";
 import {
   Area,
   AreaChart,
@@ -45,9 +45,6 @@ function parseDayMonthScore(dateStr: string): number {
 export function PerformancePage({ refreshTrigger, onSelectMatch }: Props) {
   const [data, setData] = useState<PerformanceData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [techOpen, setTechOpen] = useState(false);
-  const [glossaryOpen, setGlossaryOpen] = useState(false);
-  const [bankrollOpen, setBankrollOpen] = useState(false);
   const [breakdownTab, setBreakdownTab] = useState<"league" | "market">("league");
   const [statusFilter, setStatusFilter] = useState<ArchiveStatusFilter>("ALL");
   const [marketFilter, setMarketFilter] = useState<string>("ALL");
@@ -589,178 +586,6 @@ export function PerformancePage({ refreshTrigger, onSelectMatch }: Props) {
           </div>
         </>
       )}
-
-      {/* 3. Gelişmiş İstatistikler (Teknik) — Closed by Default */}
-      <div className="rounded-2xl bg-[#131926] border border-[#1F2937] overflow-hidden">
-        <button
-          type="button"
-          onClick={() => setTechOpen((v) => !v)}
-          className="w-full px-4 py-3 flex items-center justify-between text-xs font-bold text-slate-200 hover:bg-white/[0.02]"
-        >
-          <span>Gelişmiş İstatistikler (Teknik)</span>
-          {techOpen ? (
-            <ChevronUp className="w-4 h-4 text-slate-400" />
-          ) : (
-            <ChevronDown className="w-4 h-4 text-slate-400" />
-          )}
-        </button>
-        {techOpen && (
-          <div className="px-4 pb-4 pt-2 grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-[#1F2937]">
-            <div className="p-3.5 rounded-xl bg-[#0B0F17] border border-[#1F2937] space-y-1">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-xs font-bold text-slate-200">Oran Avantajı (CLV)</p>
-                <span className="text-base font-extrabold mono-nums text-cyan-400">
-                  {data.avg_clv_pct !== null
-                    ? `${data.avg_clv_pct > 0 ? "+" : data.avg_clv_pct < 0 ? "-" : ""}%${Math.abs(data.avg_clv_pct)}`
-                    : "Bekleniyor"}
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                Tahmini yakaladığınız oranın maç başlama saatindeki kapanış oranına göre yüzde kaç daha avantajlı olduğunu gösterir.
-              </p>
-            </div>
-            <div className="p-3.5 rounded-xl bg-[#0B0F17] border border-[#1F2937] space-y-1">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-xs font-bold text-slate-200">Tahmin Tutarlılığı (Brier)</p>
-                <span className="text-base font-extrabold mono-nums text-amber-400">
-                  {data.brier_score !== null ? data.brier_score.toFixed(3) : "—"}
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                Model olasılıklarının gerçekleşen maç sonuçlarına ne kadar yakın olduğunu ölçer; 0&apos;a yaklaştıkça daha isabetlidir.
-              </p>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Collapsible Metric Glossary */}
-      <div className="rounded-2xl bg-[#131926] border border-[#1F2937] overflow-hidden">
-        <button
-          type="button"
-          onClick={() => setGlossaryOpen((v) => !v)}
-          className="w-full px-4 py-3 flex items-center justify-between text-xs font-bold text-slate-200 hover:bg-white/[0.02]"
-        >
-          <span>Metrik Sözlüğü (Kasa Ölçeği &amp; Takım Güç Puanı)</span>
-          {glossaryOpen ? (
-            <ChevronUp className="w-4 h-4 text-slate-400" />
-          ) : (
-            <ChevronDown className="w-4 h-4 text-slate-400" />
-          )}
-        </button>
-        {glossaryOpen && (
-          <div className="px-4 pb-4 pt-1 grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-[#1F2937]">
-            <div className="p-3 rounded-xl bg-[#0B0F17] border border-[#1F2937]">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-bold text-slate-200">Önerilen Kasa Ağırlığı (1.0–5.0)</p>
-                <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 text-[10px] font-bold mono-nums">
-                  Kasa Ölçeği
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 mt-1">
-                Oran avantajı ve güven skoruna göre tek maça ayrılması önerilen kasa ağırlığını gösterir.
-              </p>
-            </div>
-            <div className="p-3 rounded-xl bg-[#0B0F17] border border-[#1F2937]">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-bold text-slate-200">Takım Güç Puanı</p>
-                <span className="px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-400 text-[10px] font-bold mono-nums">
-                  Güç
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 mt-1">
-                Avrupa kulüplerinin lig zorluğu ve uzun vadeli maç sonuçlarına göre hesaplanan güç reytingidir.
-              </p>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Collapsible Virtual Bankroll (Bottom, Closed by Default) */}
-      <div className="rounded-2xl bg-[#131926] border border-[#1F2937] overflow-hidden">
-        <button
-          type="button"
-          onClick={() => setBankrollOpen((v) => !v)}
-          className="w-full px-4 py-3 flex items-center justify-between text-xs font-bold text-slate-300 hover:bg-white/[0.02]"
-        >
-          <span>Sabit 100 ₺ Kasa Takibi</span>
-          {bankrollOpen ? (
-            <ChevronUp className="w-4 h-4 text-slate-400" />
-          ) : (
-            <ChevronDown className="w-4 h-4 text-slate-400" />
-          )}
-        </button>
-        {bankrollOpen && (
-          <div className="px-4 pb-4 pt-2 border-t border-[#1F2937] space-y-3">
-            {!data.virtual_bankroll || !data.virtual_bankroll.ready ? (
-              <p className="text-xs text-slate-400">
-                Dürüst simülasyon için en az 15 sonuçlanmış 60+ maç gerekli (şu an{" "}
-                {data.virtual_bankroll?.decided_count ?? 0}/15).
-              </p>
-            ) : (
-              <>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                  <div className="p-2.5 rounded-xl bg-[#0B0F17] border border-[#1F2937]">
-                    <span className="text-[10px] text-slate-400 block">Net Kâr/Zarar</span>
-                    <span
-                      className={`text-sm font-extrabold mono-nums ${
-                        (data.virtual_bankroll.net_profit ?? 0) >= 0
-                          ? "text-[#00FF85]"
-                          : "text-rose-400"
-                      }`}
-                    >
-                      {(data.virtual_bankroll.net_profit ?? 0) >= 0 ? "+" : ""}
-                      {data.virtual_bankroll.net_profit} ₺
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-xl bg-[#0B0F17] border border-[#1F2937]">
-                    <span className="text-[10px] text-slate-400 block">Net Getiri</span>
-                    <span className="text-sm font-extrabold mono-nums text-slate-100">
-                      %{data.virtual_bankroll.roi_pct}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-xl bg-[#0B0F17] border border-[#1F2937]">
-                    <span className="text-[10px] text-slate-400 block">En Yüksek Tepe</span>
-                    <span className="text-sm font-extrabold mono-nums text-emerald-400">
-                      +{data.virtual_bankroll.peak_profit} ₺
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-xl bg-[#0B0F17] border border-[#1F2937]">
-                    <span className="text-[10px] text-slate-400 block">Maks. Düşüş</span>
-                    <span className="text-sm font-extrabold mono-nums text-amber-400">
-                      -{data.virtual_bankroll.max_drawdown} ₺
-                    </span>
-                  </div>
-                </div>
-                {data.virtual_bankroll.series.length > 1 && (
-                  <div className="h-36 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={data.virtual_bankroll.series}>
-                        <XAxis dataKey="date" tick={{ fill: "#94a3b8", fontSize: 10 }} />
-                        <YAxis tick={{ fill: "#94a3b8", fontSize: 10 }} width={40} />
-                        <Tooltip
-                          contentStyle={{
-                            backgroundColor: "#0B0F17",
-                            borderColor: "#1F2937",
-                            fontSize: "11px",
-                          }}
-                        />
-                        <Area
-                          type="monotone"
-                          dataKey="cumulative_profit"
-                          stroke="#00FF85"
-                          fill="#00FF85"
-                          fillOpacity={0.15}
-                        />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
-      </div>
     </div>
   );
 }

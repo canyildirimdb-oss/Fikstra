@@ -20,7 +20,6 @@ import {
 } from "lucide-react";
 import { api } from "./api/client";
 import { formatMarketLabel } from "./utils/format";
-import { formatSyncTimeTr } from "./utils/highlightsFilter";
 import { analyzeSlipRisk } from "./utils/slipRisk";
 import { ControlPanel } from "./components/ControlPanel";
 import { CouponShareModal } from "./components/CouponShareModal";
@@ -125,7 +124,6 @@ export function App() {
   const [totoSlipParam, setTotoSlipParam] = useState<string | null>(initialUrlRef.current.totoSlip);
   const [notifOpen, setNotifOpen] = useState(false);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
   const [selectedMatch, setSelectedMatch] = useState<{
     matchId: number;
     predictionId?: number;
@@ -366,12 +364,6 @@ export function App() {
 
   const loadSummary = useCallback(() => {
     api.getSummary().then(setSummary).catch(() => {});
-    api
-      .getHealth()
-      .then((h) => {
-        if (h?.last_sync_at) setLastSyncAt(h.last_sync_at);
-      })
-      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -558,7 +550,6 @@ export function App() {
 
   const containerMaxWidth =
     tab === "highlights" ? "max-w-[1440px]" : tab === "performance" ? "max-w-6xl" : "max-w-5xl";
-  const syncTimeLabel = formatSyncTimeTr(lastSyncAt ?? summary?.last_sync_at);
 
   return (
     <div className="min-h-screen text-slate-100 pb-[calc(9.5rem+env(safe-area-inset-bottom))] md:pb-20">
@@ -782,17 +773,10 @@ export function App() {
 
         {/* Subtle Transparency Footer */}
         <footer className="mt-8 pt-4 border-t border-white/[0.06] flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-2">
-              <img src="/logo.png" alt="Fikstra" className="w-4 h-4 object-contain drop-shadow-[0_0_6px_rgba(0,255,133,0.3)]" />
-              Fikstra • Veri odaklı maç analizi (18+)
-            </span>
-            {syncTimeLabel && (
-              <span className="text-slate-500 mono-nums">
-                • Son güncelleme: {syncTimeLabel}
-              </span>
-            )}
-          </div>
+          <span className="inline-flex items-center gap-2">
+            <img src="/logo.png" alt="Fikstra" className="w-4 h-4 object-contain drop-shadow-[0_0_6px_rgba(0,255,133,0.3)]" />
+            Fikstra • Veri odaklı maç analizi (18+)
+          </span>
           <button
             type="button"
             onClick={() => setHowItWorksOpen(true)}
