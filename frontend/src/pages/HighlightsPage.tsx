@@ -237,7 +237,7 @@ export function HighlightsPage({
   );
   const marketChips = useMemo(() => getDynamicMarketChips(items), [items]);
   const leagueOptions = useMemo(() => getDynamicLeagues(items), [items]);
-  const upcomingSoon = useMemo(() => getUpcomingSoonItems(items, 5), [items]);
+  const upcomingSoon = useMemo(() => getUpcomingSoonItems(items, 4), [items]);
   const marketRadar = useMemo(() => getMarketRadarItems(items, 4), [items]);
 
   const { heroItem, gridItems, totalMatched, hasActiveFilter } = useMemo(
@@ -1030,9 +1030,9 @@ export function HighlightsPage({
       </div>
 
       {/* Right Smart Panel — Exclusively for Analizler (Desktop lg+ only, ~32%) */}
-      <aside className="hidden lg:block lg:sticky lg:top-20 space-y-4">
+      <aside className="hidden lg:block lg:sticky lg:top-20 lg:self-start lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto lg:overscroll-y-contain lg:pr-1.5 pb-4 space-y-3.5 fikstra-sidebar-scroll">
         {/* 1. Kuponum Fişi */}
-        <div className="rounded-2xl glass-card p-4 space-y-3 border-[#00FF85]/25">
+        <div className="rounded-2xl glass-card p-3.5 space-y-3 border-[#00FF85]/25">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Ticket className="w-4 h-4 text-[#00FF85]" />
@@ -1165,7 +1165,7 @@ export function HighlightsPage({
 
         {/* 2. Yakında Başlıyor (Canlı Maç Akışı) */}
         {upcomingSoon.length > 0 && (
-          <div className="rounded-2xl glass-card p-4 space-y-2.5">
+          <div className="rounded-2xl glass-card p-3.5 space-y-2.5">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Clock className="w-4 h-4 text-[#00FF85]" />
@@ -1224,7 +1224,7 @@ export function HighlightsPage({
 
         {/* 3. Piyasa Radarı (Oran Hareketi & Değer) */}
         {marketRadar.length > 0 && (
-          <div className="rounded-2xl glass-card p-4 space-y-2.5">
+          <div className="rounded-2xl glass-card p-3.5 space-y-2.5">
             <div className="flex items-center gap-2">
               <Activity className="w-4 h-4 text-[#00FF85]" />
               <h2 className="text-sm font-extrabold text-white">Piyasa Radarı</h2>
@@ -1273,7 +1273,7 @@ export function HighlightsPage({
 
         {/* 4. Hızlı Lig Kısayolları */}
         {leagueOptions.length > 0 && (
-          <div className="rounded-2xl glass-card p-4 space-y-2.5">
+          <div className="rounded-2xl glass-card p-3.5 space-y-2.5">
             <div className="flex items-center gap-2">
               <Trophy className="w-4 h-4 text-[#00FF85]" />
               <h2 className="text-sm font-extrabold text-white">Hızlı Lig Kısayolları</h2>

@@ -49,6 +49,25 @@
   scrollbar-width: none;
 }
 
+/* Thin emerald scrollbar for desktop independent right sidebar */
+.fikstra-sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(16, 185, 129, 0.3) transparent;
+}
+.fikstra-sidebar-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+.fikstra-sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.fikstra-sidebar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(16, 185, 129, 0.28);
+  border-radius: 9999px;
+}
+.fikstra-sidebar-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(16, 185, 129, 0.55);
+}
+
 @keyframes totoShimmer {
   0% {
     background-position: 0% 50%;
