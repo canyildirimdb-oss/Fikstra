@@ -134,6 +134,7 @@ export function HighlightsPage({
   refreshTrigger,
 }: Props) {
   const [filterState, setFilterState] = useState<HighlightsFilterState>(DEFAULT_HIGHLIGHTS_FILTER);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [items, setItems] = useState<PredictionItem[]>([]);
   const [perf, setPerf] = useState<PerformanceData | null>(null);
   const [announcements, setAnnouncements] = useState<SiteAnnouncement[]>([]);
@@ -377,7 +378,7 @@ export function HighlightsPage({
               logoUrl={heroItem.league_logo_url}
             />
 
-            <div className="flex-1 min-w-0 p-4 sm:p-5 lg:p-6 space-y-3.5">
+            <div className="flex-1 min-w-0 p-3 lg:p-6 space-y-2 lg:space-y-3.5">
               {/* Top Row: Fixed Brand Title + Real TR Kickoff Time */}
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
@@ -389,15 +390,32 @@ export function HighlightsPage({
                     · {heroItem.league}
                   </span>
                 </div>
-                <span className="text-[11px] lg:text-xs mono-nums text-slate-200 font-semibold shrink-0 px-2.5 py-0.5 rounded-full bg-white/[0.05] border border-white/10">
+                <span className="text-[10.5px] lg:text-xs mono-nums text-slate-200 font-semibold shrink-0 px-2 py-0.5 lg:px-2.5 rounded-full bg-white/[0.05] border border-white/10">
                   {formatHeroKickoffLabel(heroItem, todayDdMmTr)}
                 </span>
               </div>
 
-              {/* Middle: Matchup + Pick + Reasons + Tiered Confidence Ring */}
-              <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0 flex-1 space-y-3">
-                  <div className="flex items-center gap-2.5 flex-wrap">
+              {/* Mobile-only Full-Width Single-Line Matchup Row */}
+              <div className="lg:hidden flex items-center gap-1.5 min-w-0">
+                <div className="flex items-center gap-1.5 min-w-0 shrink">
+                  <TeamBadge name={heroItem.home_team} logoUrl={heroItem.home_logo_url} size="sm" />
+                  <span className="text-[14px] font-extrabold text-white truncate">
+                    {heroItem.home_team}
+                  </span>
+                </div>
+                <span className="text-[11px] text-slate-500 font-bold shrink-0">vs</span>
+                <div className="flex items-center gap-1.5 min-w-0 shrink">
+                  <TeamBadge name={heroItem.away_team} logoUrl={heroItem.away_logo_url} size="sm" />
+                  <span className="text-[14px] font-extrabold text-white truncate">
+                    {heroItem.away_team}
+                  </span>
+                </div>
+              </div>
+
+              {/* Middle: Matchup (Desktop) + Pick + Reasons + Tiered Confidence Ring */}
+              <div className="flex items-center justify-between gap-2.5 lg:gap-4">
+                <div className="min-w-0 flex-1 space-y-1.5 lg:space-y-3">
+                  <div className="hidden lg:flex items-center gap-2.5 flex-wrap">
                     <div className="flex items-center gap-2 min-w-0">
                       <TeamBadge name={heroItem.home_team} logoUrl={heroItem.home_logo_url} size="md" />
                       <span className="text-sm sm:text-base lg:text-lg font-extrabold text-white truncate">
@@ -413,50 +431,59 @@ export function HighlightsPage({
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="inline-flex items-center gap-2 px-3 py-1 lg:px-3.5 lg:py-1.5 rounded-full bg-[#00FF85]/15 border border-[#00FF85]/45 text-xs lg:text-sm font-bold text-[#00FF85] shadow-[0_0_12px_-4px_rgba(0,255,133,0.45)]">
-                      <span>
-                        {formatPickWithTeam(
-                          heroItem.market_key,
-                          heroItem.selection_key,
-                          heroItem.home_team,
-                          heroItem.away_team
-                        )}
+                  <div className="flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-1.5 lg:gap-2">
+                    <div className="flex items-center gap-1.5 lg:contents flex-wrap">
+                      <span className="inline-flex items-center gap-1.5 lg:gap-2 px-2.5 py-1 lg:px-3.5 lg:py-1.5 rounded-full bg-[#00FF85]/15 border border-[#00FF85]/45 text-xs lg:text-sm font-bold text-[#00FF85] shadow-[0_0_12px_-4px_rgba(0,255,133,0.45)]">
+                        <span>
+                          {formatPickWithTeam(
+                            heroItem.market_key,
+                            heroItem.selection_key,
+                            heroItem.home_team,
+                            heroItem.away_team
+                          )}
+                        </span>
+                        <span className="mono-nums text-white font-extrabold">
+                          {heroItem.iddaa_odd.toFixed(2)}
+                        </span>
                       </span>
-                      <span className="mono-nums text-white font-extrabold">
-                        {heroItem.iddaa_odd.toFixed(2)}
-                      </span>
-                    </span>
 
-                    {heroProb > 0 && (
-                      <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-[11px] lg:text-xs font-bold mono-nums text-emerald-300">
-                        %{heroProb}
-                      </span>
-                    )}
+                      {heroProb > 0 && (
+                        <span className="px-2 py-0.5 lg:px-2.5 lg:py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-[11px] lg:text-xs font-bold mono-nums text-emerald-300">
+                          %{heroProb}
+                        </span>
+                      )}
+                    </div>
 
-                    {heroReasons.map((reason) => (
-                      <span
-                        key={reason}
-                        className="px-2.5 py-1 rounded-full bg-white/[0.05] border border-white/10 text-[11px] lg:text-xs font-medium text-slate-300"
-                      >
-                        {reason}
-                      </span>
-                    ))}
+                    <div className="flex items-center gap-1.5 lg:contents flex-nowrap overflow-hidden">
+                      {heroReasons.map((reason) => (
+                        <span
+                          key={reason}
+                          className="px-2 py-0.5 lg:px-2.5 lg:py-1 rounded-full bg-white/[0.05] border border-white/10 text-[10.5px] lg:text-xs font-medium text-slate-300 whitespace-nowrap"
+                        >
+                          {reason}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
-                <ConfidenceRing score={heroItem.confidence_score} size={68} />
+                <div className="lg:hidden shrink-0">
+                  <ConfidenceRing score={heroItem.confidence_score} size={56} />
+                </div>
+                <div className="hidden lg:block shrink-0">
+                  <ConfidenceRing score={heroItem.confidence_score} size={68} />
+                </div>
               </div>
 
               {/* Action Footer */}
-              <div className="pt-2.5 border-t border-white/[0.06] flex flex-wrap items-center justify-between gap-2">
+              <div className="pt-2 lg:pt-2.5 border-t border-white/[0.06] flex flex-wrap items-center justify-between gap-2">
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     onToggleSlip(toSlipItem(heroItem));
                   }}
-                  className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 lg:px-3.5 lg:py-1.5 rounded-xl text-xs font-bold border transition-all ${
                     heroInSlip
                       ? "bg-[#00FF85] text-[#05080D] border-[#00FF85] shadow-[0_0_12px_rgba(0,255,133,0.45)]"
                       : "bg-white/[0.04] text-slate-100 border-white/15 hover:border-[#00FF85]/60 hover:text-[#00FF85]"
@@ -566,8 +593,161 @@ export function HighlightsPage({
           )}
         </div>
 
-        {/* Conflict-Free 2-Row Smart Filter Bar */}
-        <div className="sticky top-16 z-20 -mx-4 px-4 lg:mx-0 lg:px-4 py-3 bg-[#05080D]/95 backdrop-blur-xl border-b lg:border lg:rounded-2xl border-white/[0.06] space-y-2.5">
+        {/* Mobile-only Single-Row Horizontal Scrollable Filter Strip */}
+        <div className="lg:hidden sticky top-16 z-20 -mx-4 px-4 py-2 bg-[#05080D]/95 backdrop-blur-xl border-b border-white/[0.06]">
+          <div className="relative">
+            <div className="flex items-center gap-2 overflow-x-auto flex-nowrap py-1 pr-6 no-scrollbar">
+              <button
+                type="button"
+                onClick={() => setMobileSearchOpen((v) => !v)}
+                aria-label="Takım veya lig ara"
+                aria-expanded={mobileSearchOpen}
+                className={`h-9 w-9 inline-flex items-center justify-center rounded-full border shrink-0 transition-all ${
+                  mobileSearchOpen || filterState.search.trim().length > 0
+                    ? "bg-[#00FF85]/20 border-[#00FF85]/55 text-[#00FF85]"
+                    : "bg-[#0B111C] border-white/10 text-slate-300"
+                }`}
+              >
+                <Search className="w-4 h-4" />
+              </button>
+
+              {hasActiveFilter && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetFilters();
+                    setMobileSearchOpen(false);
+                  }}
+                  className="h-9 px-3 rounded-full inline-flex items-center gap-1 text-xs font-bold bg-rose-500/15 border border-rose-500/35 text-rose-300 shrink-0 whitespace-nowrap"
+                >
+                  <span>Temizle</span>
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setFilterState((prev) => ({ ...prev, todayOnly: !prev.todayOnly }))}
+                className={`h-9 px-3 rounded-full inline-flex items-center gap-1.5 text-xs font-bold border transition-all shrink-0 whitespace-nowrap ${
+                  filterState.todayOnly
+                    ? "bg-[#00FF85]/20 border-[#00FF85]/55 text-[#00FF85]"
+                    : "bg-[#0B111C] border-white/10 text-slate-300"
+                }`}
+              >
+                <CalendarClock className="w-3.5 h-3.5" />
+                <span>Sadece Bugün</span>
+                <span className="mono-nums opacity-85">({todayCount})</span>
+              </button>
+
+              <span className="h-5 w-px bg-white/10 shrink-0" aria-hidden="true" />
+
+              {marketChips.map((chip) => {
+                const active = filterState.market === chip.key;
+                return (
+                  <button
+                    key={chip.key}
+                    type="button"
+                    onClick={() => setFilterState((prev) => ({ ...prev, market: chip.key }))}
+                    className={`h-9 px-3 rounded-full inline-flex items-center gap-1.5 text-xs font-bold shrink-0 whitespace-nowrap transition-all ${
+                      active
+                        ? "bg-[#00FF85] text-[#05080D] shadow-[0_0_12px_-4px_rgba(0,255,133,0.6)]"
+                        : "bg-white/[0.04] border border-white/10 text-slate-300"
+                    }`}
+                  >
+                    <span>{chip.label}</span>
+                    <span
+                      className={`mono-nums text-[10px] ${
+                        active ? "text-[#05080D]/80 font-extrabold" : "text-slate-400"
+                      }`}
+                    >
+                      {chip.count}
+                    </span>
+                  </button>
+                );
+              })}
+
+              <span className="h-5 w-px bg-white/10 shrink-0" aria-hidden="true" />
+
+              <select
+                value={filterState.league}
+                onChange={(e) => setFilterState((prev) => ({ ...prev, league: e.target.value }))}
+                aria-label="Lig seç"
+                className={`h-9 px-3 rounded-full text-xs font-semibold shrink-0 outline-none max-w-[165px] border transition-all ${
+                  filterState.league !== "ALL"
+                    ? "bg-[#00FF85]/15 border-[#00FF85]/55 text-[#00FF85]"
+                    : "bg-[#0B111C] border-white/10 text-slate-200"
+                }`}
+              >
+                <option value="ALL" className="bg-[#0B111C] text-slate-200">
+                  Tüm Ligler ({leagueOptions.length})
+                </option>
+                {leagueOptions.map((opt) => (
+                  <option key={opt.league} value={opt.league} className="bg-[#0B111C] text-slate-200">
+                    {opt.league} ({opt.count})
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={filterState.sort}
+                onChange={(e) =>
+                  setFilterState((prev) => ({ ...prev, sort: e.target.value as SortKey }))
+                }
+                aria-label="Sıralama seç"
+                className={`h-9 px-3 rounded-full text-xs font-semibold shrink-0 outline-none border transition-all ${
+                  filterState.sort !== "confidence"
+                    ? "bg-[#00FF85]/15 border-[#00FF85]/55 text-[#00FF85]"
+                    : "bg-[#0B111C] border-white/10 text-slate-200"
+                }`}
+              >
+                <option value="confidence" className="bg-[#0B111C] text-slate-200">
+                  Sırala: Güven
+                </option>
+                <option value="time" className="bg-[#0B111C] text-slate-200">
+                  Sırala: Saat
+                </option>
+                <option value="odd" className="bg-[#0B111C] text-slate-200">
+                  Sırala: Oran
+                </option>
+              </select>
+            </div>
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-[#05080D] via-[#05080D]/80 to-transparent"
+            />
+          </div>
+
+          {mobileSearchOpen && (
+            <div className="pt-2 relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-[calc(50%+4px)] -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                autoFocus
+                value={filterState.search}
+                onChange={(e) => setFilterState((prev) => ({ ...prev, search: e.target.value }))}
+                placeholder="Takım veya lig ara..."
+                className="w-full h-9 pl-8 pr-8 rounded-xl bg-[#0B111C] border border-white/10 text-xs text-slate-100 placeholder:text-slate-500 focus:border-[#00FF85]/50 outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (filterState.search) {
+                    setFilterState((prev) => ({ ...prev, search: "" }));
+                  } else {
+                    setMobileSearchOpen(false);
+                  }
+                }}
+                className="absolute right-2.5 top-[calc(50%+4px)] -translate-y-1/2 text-slate-400 hover:text-white"
+                aria-label="Aramayı temizle veya kapat"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Desktop Conflict-Free 2-Row Smart Filter Bar */}
+        <div className="hidden lg:block sticky top-16 z-20 -mx-4 px-4 lg:mx-0 lg:px-4 py-3 bg-[#05080D]/95 backdrop-blur-xl border-b lg:border lg:rounded-2xl border-white/[0.06] space-y-2.5">
           {/* Row 1: Search Input + Today Toggle + Leagues + Sort */}
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative flex-1 min-w-[200px]">
