@@ -92,10 +92,10 @@ function parseInitialUrl(): {
   return { tab, matchId, predictionId, couponsView, totoSlip };
 }
 
-const TABS: { key: TabKey; label: string; mobileLabel?: string; badge?: string; icon: typeof Flame }[] = [
+const TABS: { key: TabKey; label: string; icon: typeof Flame }[] = [
   { key: "highlights", label: "Analizler", icon: Flame },
   { key: "coupons", label: "Kuponlar", icon: Layers },
-  { key: "toto", label: "Fikstra Toto", mobileLabel: "Toto", badge: "Yeni", icon: Grid3X3 },
+  { key: "toto", label: "Spor Toto", icon: Grid3X3 },
   { key: "performance", label: "Performans", icon: BarChart3 },
 ];
 
@@ -556,7 +556,7 @@ export function App() {
     );
   }
 
-  const containerMaxWidth = tab === "highlights" ? "max-w-7xl" : "max-w-5xl";
+  const containerMaxWidth = tab === "highlights" ? "max-w-[1440px]" : "max-w-5xl";
   const syncTimeLabel = formatSyncTimeTr(lastSyncAt ?? summary?.last_sync_at);
 
   return (
@@ -596,16 +596,7 @@ export function App() {
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5" />
-                  {t.badge ? (
-                    <span className="inline-flex items-center gap-1.5">
-                      <span className="toto-shimmer-text font-extrabold">{t.label}</span>
-                      <span className="px-1.5 py-[1px] rounded-full bg-[#00FF85] text-[#05080D] text-[9px] font-extrabold leading-none shadow-[0_0_8px_rgba(0,255,133,0.45)]">
-                        {t.badge}
-                      </span>
-                    </span>
-                  ) : (
-                    t.label
-                  )}
+                  {t.label}
                   {t.key === "coupons" && slipItems.length > 0 && (
                     <span className="ml-0.5 px-1.5 py-0.5 rounded-full bg-[#00FF85] text-[#05080D] text-[10px] font-extrabold mono-nums leading-none">
                       {slipItems.length}
@@ -619,17 +610,8 @@ export function App() {
             })}
           </nav>
 
-          {/* Live Freshness + Telegram Bridge + Circular Dark Glass Notification Action */}
+          {/* Telegram Bridge + Circular Dark Glass Notification Action */}
           <div className="flex items-center gap-2 shrink-0">
-            {syncTimeLabel && (
-              <span
-                className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-[11px] font-bold mono-nums text-emerald-300"
-                title="Son canlı veri güncellemesi (TR saati)"
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-[#00FF85] animate-pulse" />
-                Canlı · {syncTimeLabel}
-              </span>
-            )}
             <a
               href={TELEGRAM_INVITE_URL}
               target="_blank"
@@ -799,10 +781,17 @@ export function App() {
 
         {/* Subtle Transparency Footer */}
         <footer className="mt-8 pt-4 border-t border-white/[0.06] flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
-          <span className="inline-flex items-center gap-2">
-            <img src="/logo.png" alt="Fikstra" className="w-4 h-4 object-contain drop-shadow-[0_0_6px_rgba(0,255,133,0.3)]" />
-            Fikstra • Veri odaklı maç analizi (18+)
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-2">
+              <img src="/logo.png" alt="Fikstra" className="w-4 h-4 object-contain drop-shadow-[0_0_6px_rgba(0,255,133,0.3)]" />
+              Fikstra • Veri odaklı maç analizi (18+)
+            </span>
+            {syncTimeLabel && (
+              <span className="text-slate-500 mono-nums">
+                • Son güncelleme: {syncTimeLabel}
+              </span>
+            )}
+          </div>
           <button
             type="button"
             onClick={() => setHowItWorksOpen(true)}
@@ -1116,18 +1105,9 @@ export function App() {
                       {slipItems.length}
                     </span>
                   )}
-                  {t.badge && (
-                    <span className="absolute -top-2 -right-5 px-1 py-[1px] rounded-full bg-[#00FF85] text-[#05080D] text-[7.5px] font-extrabold leading-none shadow">
-                      {t.badge}
-                    </span>
-                  )}
                 </div>
-                <span
-                  className={`text-[10px] font-semibold mt-0.5 truncate max-w-full ${
-                    t.badge ? "toto-shimmer-text font-extrabold" : ""
-                  }`}
-                >
-                  {t.mobileLabel || t.label}
+                <span className="text-[10px] font-semibold mt-0.5 truncate max-w-full">
+                  {t.label}
                 </span>
                 {active && (
                   <span className="absolute bottom-0.5 w-6 h-[2.5px] rounded-full bg-[#00FF85] shadow-[0_0_8px_#00FF85]" />

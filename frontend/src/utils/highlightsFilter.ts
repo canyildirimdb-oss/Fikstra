@@ -1,6 +1,6 @@
 import type { PredictionItem } from "../types";
 
-export type MarketFilterKey = "ALL" | "MS" | "AU_25_UST" | "KG_VAR" | "CS";
+export type MarketFilterKey = "ALL" | "MS" | "AU_25_UST" | "AU_35_ALT" | "KG_VAR" | "CS";
 export type SortKey = "confidence" | "time" | "odd";
 export type ConfidenceTierKey = "ELIT" | "GUCLU" | "DENGELI";
 
@@ -30,6 +30,15 @@ export interface MarketChipOption {
 export interface LeagueOption {
   league: string;
   count: number;
+  country?: string;
+  logoUrl?: string | null;
+}
+
+export interface MarketRadarEntry {
+  item: PredictionItem;
+  signalLabel: "Oran Düşüşü" | "Global Değer";
+  signalMetric: string;
+  score: number;
 }
 
 export const DEFAULT_HIGHLIGHTS_FILTER: HighlightsFilterState = {
@@ -81,7 +90,7 @@ export function getConfidenceTier(score: number): ConfidenceTierInfo {
   if (score >= 75) {
     return {
       key: "ELIT",
-      label: "ELİT",
+      label: "ELİT TERCİH",
       stroke: "#00FF85",
       textCls: "text-[#00FF85]",
       badgeCls:
@@ -92,7 +101,7 @@ export function getConfidenceTier(score: number): ConfidenceTierInfo {
   if (score >= 68) {
     return {
       key: "GUCLU",
-      label: "GÜÇLÜ",
+      label: "GÜÇLÜ TERCİH",
       stroke: "#10B981",
       textCls: "text-emerald-400",
       badgeCls: "bg-teal-500/15 border-teal-400/40 text-teal-300",
@@ -101,20 +110,20 @@ export function getConfidenceTier(score: number): ConfidenceTierInfo {
   }
   return {
     key: "DENGELI",
-    label: "DENGELİ",
+    label: "DENGELİ TERCİH",
     stroke: "#F59E0B",
     textCls: "text-amber-300",
     badgeCls: "bg-amber-500/15 border-amber-400/35 text-amber-300",
   };
 }
 
-export function isHeroVisible(state: HighlightsFilterState): boolean {
+export function hasActiveHighlightsFilter(state: HighlightsFilterState): boolean {
   return (
-    state.search.trim() === "" &&
-    state.market === "ALL" &&
-    state.league === "ALL" &&
-    !state.todayOnly &&
-    state.sort === "confidence"
+    state.search.trim() !== "" ||
+    state.market !== "ALL" ||
+    state.league !== "ALL" ||
+    state.todayOnly ||
+    state.sort !== "confidence"
   );
 }
 
@@ -141,6 +150,8 @@ export function matchesMarketFilter(item: PredictionItem, market: MarketFilterKe
       return item.market_key === "MS";
     case "AU_25_UST":
       return item.market_key === "AU_25" && item.selection_key === "UST";
+    case "AU_35_ALT":
+      return item.market_key === "AU_35" && item.selection_key === "ALT";
     case "KG_VAR":
       return item.market_key === "KG" && item.selection_key === "VAR";
     case "CS":
@@ -174,6 +185,7 @@ export function getDynamicMarketChips(allItems: PredictionItem[]): MarketChipOpt
     { key: "ALL", label: "Tümü" },
     { key: "MS", label: "MS" },
     { key: "AU_25_UST", label: "2.5 Üst" },
+    { key: "AU_35_ALT", label: "3.5 Alt" },
     { key: "KG_VAR", label: "KG Var" },
     { key: "CS", label: "ÇŞ" },
   ];
@@ -191,15 +203,25 @@ export function getDynamicMarketChips(allItems: PredictionItem[]): MarketChipOpt
 }
 
 export function getDynamicLeagues(allItems: PredictionItem[]): LeagueOption[] {
-  const counts = new Map<string, number>();
+  const map = new Map<string, LeagueOption>();
   for (const item of allItems) {
     const lg = (item.league || "").trim();
     if (!lg) continue;
-    counts.set(lg, (counts.get(lg) ?? 0) + 1);
+    const prev = map.get(lg);
+    if (prev) {
+      prev.count += 1;
+    } else {
+      map.set(lg, {
+        league: lg,
+        count: 1,
+        country: item.country,
+        logoUrl: item.league_logo_url,
+      });
+    }
   }
-  return Array.from(counts.entries())
-    .map(([league, count]) => ({ league, count }))
-    .sort((a, b) => b.count - a.count || a.league.localeCompare(b.league, "tr-TR"));
+  return Array.from(map.values()).sort(
+    (a, b) => b.count - a.count || a.league.localeCompare(b.league, "tr-TR")
+  );
 }
 
 function normalizeSearch(value: string): string {
@@ -220,8 +242,9 @@ export function filterAndSortHighlights(
   totalMatched: number;
   hasActiveFilter: boolean;
 } {
-  const hasActiveFilter = !isHeroVisible(state);
-  const heroItem = hasActiveFilter ? null : selectHeroItem(allItems);
+  const hasActiveFilter = hasActiveHighlightsFilter(state);
+  // Hero is ALWAYS fixed from the unfiltered main pool
+  const heroItem = selectHeroItem(allItems);
   const queryNorm = normalizeSearch(state.search);
 
   const filtered = allItems.filter((item) => {
@@ -255,11 +278,15 @@ export function filterAndSortHighlights(
   });
 
   const totalMatched = sorted.length;
-  const gridItems = heroItem
-    ? sorted.filter(
-        (item) => item.prediction_id !== heroItem.prediction_id && item.match_id !== heroItem.match_id
-      )
-    : sorted;
+  // When any filter/search is active, show ALL matching items in the grid (never drop Hero);
+  // when completely unfiltered, omit only the Hero item from the grid to avoid duplication.
+  const gridItems =
+    !hasActiveFilter && heroItem
+      ? sorted.filter(
+          (item) =>
+            item.prediction_id !== heroItem.prediction_id && item.match_id !== heroItem.match_id
+        )
+      : sorted;
 
   return {
     heroItem,
@@ -267,6 +294,69 @@ export function filterAndSortHighlights(
     totalMatched,
     hasActiveFilter,
   };
+}
+
+export function getUpcomingSoonItems(
+  allItems: PredictionItem[],
+  limit = 5,
+  nowMs: number = Date.now()
+): PredictionItem[] {
+  const future = allItems.filter((it) => {
+    const ms = Date.parse(it.start_time_utc);
+    return Number.isNaN(ms) || ms >= nowMs - 5 * 60_000;
+  });
+  const pool = future.length > 0 ? future : allItems;
+  return [...pool]
+    .sort((a, b) => {
+      const ta = Date.parse(a.start_time_utc);
+      const tb = Date.parse(b.start_time_utc);
+      if (ta !== tb) return ta - tb;
+      return b.confidence_score - a.confidence_score;
+    })
+    .slice(0, limit);
+}
+
+export function getMarketRadarItems(
+  allItems: PredictionItem[],
+  limit = 4
+): MarketRadarEntry[] {
+  const entries: MarketRadarEntry[] = [];
+  for (const item of allItems) {
+    const dropPct =
+      item.odds_drop_pct != null && item.odds_drop_pct > 0
+        ? item.odds_drop_pct
+        : item.opening_odd > item.iddaa_odd && item.opening_odd > 0
+        ? ((item.opening_odd - item.iddaa_odd) / item.opening_odd) * 100
+        : 0;
+    const edgePct = item.value_edge_pct != null ? item.value_edge_pct : 0;
+    const moveRatio = (item.breakdown?.odds_move ?? 0) / 25;
+    const valRatio = (item.breakdown?.value ?? 0) / 35;
+
+    if (dropPct >= 2 || (moveRatio >= valRatio && (item.breakdown?.odds_move ?? 0) >= 12)) {
+      const metric =
+        dropPct >= 1
+          ? `-%${dropPct.toFixed(0)} (${item.opening_odd.toFixed(2)}→${item.iddaa_odd.toFixed(2)})`
+          : `${item.opening_odd.toFixed(2)}→${item.iddaa_odd.toFixed(2)}`;
+      entries.push({
+        item,
+        signalLabel: "Oran Düşüşü",
+        signalMetric: metric,
+        score: dropPct * 2 + moveRatio * 10,
+      });
+    } else if (edgePct >= 1 || (item.breakdown?.value ?? 0) >= 18) {
+      const metric =
+        edgePct >= 1
+          ? `+%${edgePct.toFixed(1)} Değer`
+          : `Global ${item.global_odd ? item.global_odd.toFixed(2) : item.iddaa_odd.toFixed(2)}`;
+      entries.push({
+        item,
+        signalLabel: "Global Değer",
+        signalMetric: metric,
+        score: edgePct * 2 + valRatio * 10,
+      });
+    }
+  }
+  return entries.sort((a, b) => b.score - a.score).slice(0, limit);
 }
 
 const FOTMOB_LEAGUE_IDS: { pattern: RegExp; id: number; abbr: string }[] = [

@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
+  Activity,
   ArrowRight,
-  BarChart3,
   BookmarkPlus,
   CalendarClock,
   Check,
+  Clock,
   Flame,
   Grid3X3,
-  Layers,
   Link2,
   Plus,
   RotateCcw,
@@ -17,6 +17,7 @@ import {
   Share2,
   Ticket,
   Trash2,
+  Trophy,
   X,
   Zap,
 } from "lucide-react";
@@ -37,7 +38,9 @@ import {
   getDynamicLeagues,
   getDynamicMarketChips,
   getEffectiveModelProb,
+  getMarketRadarItems,
   getTodayTrDdMm,
+  getUpcomingSoonItems,
   isItemTodayTr,
   type HighlightsFilterState,
   type SortKey,
@@ -45,7 +48,7 @@ import {
 import { analyzeSlipRisk } from "../utils/slipRisk";
 import { ConfidenceRing } from "../components/ConfidenceRing";
 import { StakeCalculator } from "../components/StakeCalculator";
-import { FormStrip, LeagueLogoColumn, TeamBadge } from "../components/TeamBadge";
+import { FormStrip, LeagueBadge, LeagueLogoColumn, TeamBadge } from "../components/TeamBadge";
 
 interface Props {
   summary: DashboardSummary | null;
@@ -233,6 +236,8 @@ export function HighlightsPage({
   );
   const marketChips = useMemo(() => getDynamicMarketChips(items), [items]);
   const leagueOptions = useMemo(() => getDynamicLeagues(items), [items]);
+  const upcomingSoon = useMemo(() => getUpcomingSoonItems(items, 5), [items]);
+  const marketRadar = useMemo(() => getMarketRadarItems(items, 4), [items]);
 
   const { heroItem, gridItems, totalMatched, hasActiveFilter } = useMemo(
     () => filterAndSortHighlights(items, filterState, todayDdMmTr),
@@ -281,7 +286,7 @@ export function HighlightsPage({
           {
             key: `toto-${totoWeek.id}`,
             icon: "toto" as const,
-            text: `Fikstra Toto ${totoWeek.title} yayında · 8–256 kolon şablonlarını hemen kur`,
+            text: `Spor Toto ${totoWeek.title} yayında · 8–256 kolon şablonlarını hemen kur`,
             onClick: onGoToto,
           },
         ]
@@ -346,19 +351,13 @@ export function HighlightsPage({
     : false;
   const heroProb = heroItem ? Math.round(getEffectiveModelProb(heroItem)) : 0;
 
-  const winRateDisplay =
-    perf && perf.total_settled > 0
-      ? Math.round((perf.won_count / perf.total_settled) * 100)
-      : summary?.overall_win_rate ?? null;
-  const settledTotalDisplay = perf?.total_settled ?? summary?.settled_total ?? 0;
-
   const resetFilters = () => setFilterState(DEFAULT_HIGHLIGHTS_FILTER);
 
   return (
-    <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_360px] lg:gap-5 lg:items-start">
-      {/* Left Main Content Area (~68-70%) */}
-      <div className="min-w-0 space-y-3.5">
-        {/* Hero Card: FİKSTRA'NIN TERCİHİ (only when completely unfiltered) */}
+    <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px] lg:gap-6 lg:items-start">
+      {/* Left Main Content Area (~68%) */}
+      <div className="min-w-0 space-y-4">
+        {/* Hero Card: FİKSTRA'NIN TERCİHİ (ALWAYS visible & fixed from unfiltered main pool) */}
         {heroItem && (
           <div
             role="button"
@@ -378,44 +377,44 @@ export function HighlightsPage({
               logoUrl={heroItem.league_logo_url}
             />
 
-            <div className="flex-1 min-w-0 p-4 sm:p-5 space-y-3">
+            <div className="flex-1 min-w-0 p-4 sm:p-5 lg:p-6 space-y-3.5">
               {/* Top Row: Fixed Brand Title + Real TR Kickoff Time */}
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold text-[#00FF85] uppercase tracking-wider shrink-0">
-                    <Flame className="w-3.5 h-3.5" />
+                  <span className="inline-flex items-center gap-1.5 text-[11px] lg:text-xs font-extrabold text-[#00FF85] uppercase tracking-wider shrink-0">
+                    <Flame className="w-3.5 h-3.5 lg:w-4 lg:h-4" />
                     FİKSTRA&apos;NIN TERCİHİ
                   </span>
-                  <span className="hidden sm:inline text-[11px] text-slate-400 truncate">
+                  <span className="hidden sm:inline text-xs text-slate-400 truncate">
                     · {heroItem.league}
                   </span>
                 </div>
-                <span className="text-[11px] mono-nums text-slate-200 font-semibold shrink-0 px-2 py-0.5 rounded-full bg-white/[0.05] border border-white/10">
+                <span className="text-[11px] lg:text-xs mono-nums text-slate-200 font-semibold shrink-0 px-2.5 py-0.5 rounded-full bg-white/[0.05] border border-white/10">
                   {formatHeroKickoffLabel(heroItem, todayDdMmTr)}
                 </span>
               </div>
 
               {/* Middle: Matchup + Pick + Reasons + Tiered Confidence Ring */}
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0 flex-1 space-y-2.5">
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0 flex-1 space-y-3">
                   <div className="flex items-center gap-2.5 flex-wrap">
-                    <div className="flex items-center gap-1.5 min-w-0">
+                    <div className="flex items-center gap-2 min-w-0">
                       <TeamBadge name={heroItem.home_team} logoUrl={heroItem.home_logo_url} size="md" />
-                      <span className="text-sm sm:text-base font-extrabold text-white truncate">
+                      <span className="text-sm sm:text-base lg:text-lg font-extrabold text-white truncate">
                         {heroItem.home_team}
                       </span>
                     </div>
-                    <span className="text-xs text-slate-500 font-bold">vs</span>
-                    <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-xs lg:text-sm text-slate-500 font-bold">vs</span>
+                    <div className="flex items-center gap-2 min-w-0">
                       <TeamBadge name={heroItem.away_team} logoUrl={heroItem.away_logo_url} size="md" />
-                      <span className="text-sm sm:text-base font-extrabold text-white truncate">
+                      <span className="text-sm sm:text-base lg:text-lg font-extrabold text-white truncate">
                         {heroItem.away_team}
                       </span>
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#00FF85]/15 border border-[#00FF85]/45 text-xs font-bold text-[#00FF85] shadow-[0_0_12px_-4px_rgba(0,255,133,0.45)]">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-2 px-3 py-1 lg:px-3.5 lg:py-1.5 rounded-full bg-[#00FF85]/15 border border-[#00FF85]/45 text-xs lg:text-sm font-bold text-[#00FF85] shadow-[0_0_12px_-4px_rgba(0,255,133,0.45)]">
                       <span>
                         {formatPickWithTeam(
                           heroItem.market_key,
@@ -430,7 +429,7 @@ export function HighlightsPage({
                     </span>
 
                     {heroProb > 0 && (
-                      <span className="px-2 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-[11px] font-bold mono-nums text-emerald-300">
+                      <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-[11px] lg:text-xs font-bold mono-nums text-emerald-300">
                         %{heroProb}
                       </span>
                     )}
@@ -438,7 +437,7 @@ export function HighlightsPage({
                     {heroReasons.map((reason) => (
                       <span
                         key={reason}
-                        className="px-2.5 py-1 rounded-full bg-white/[0.05] border border-white/10 text-[11px] font-medium text-slate-300"
+                        className="px-2.5 py-1 rounded-full bg-white/[0.05] border border-white/10 text-[11px] lg:text-xs font-medium text-slate-300"
                       >
                         {reason}
                       </span>
@@ -446,7 +445,7 @@ export function HighlightsPage({
                   </div>
                 </div>
 
-                <ConfidenceRing score={heroItem.confidence_score} size={62} />
+                <ConfidenceRing score={heroItem.confidence_score} size={68} />
               </div>
 
               {/* Action Footer */}
@@ -457,14 +456,14 @@ export function HighlightsPage({
                     e.stopPropagation();
                     onToggleSlip(toSlipItem(heroItem));
                   }}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold border transition-all ${
                     heroInSlip
                       ? "bg-[#00FF85] text-[#05080D] border-[#00FF85] shadow-[0_0_12px_rgba(0,255,133,0.45)]"
                       : "bg-white/[0.04] text-slate-100 border-white/15 hover:border-[#00FF85]/60 hover:text-[#00FF85]"
                   }`}
                 >
                   {heroInSlip ? <Check className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
-                  {heroInSlip ? "Kuponda" : "+ Kupona Ekle"}
+                  <span>{heroInSlip ? "Kuponda" : "Kupona Ekle"}</span>
                 </button>
 
                 <button
@@ -473,7 +472,7 @@ export function HighlightsPage({
                     e.stopPropagation();
                     onSelectMatch(heroItem.match_id, heroItem.prediction_id);
                   }}
-                  className="inline-flex items-center gap-1 text-xs font-bold text-[#00FF85] hover:underline"
+                  className="inline-flex items-center gap-1 text-xs lg:text-[13px] font-bold text-[#00FF85] hover:underline"
                 >
                   Analizi Gör
                   <ArrowRight className="w-3.5 h-3.5" />
@@ -567,11 +566,76 @@ export function HighlightsPage({
           )}
         </div>
 
-        {/* Dynamic Smart Filter Bar */}
-        <div className="sticky top-16 z-20 -mx-4 px-4 lg:mx-0 lg:px-3 py-2.5 bg-[#05080D]/92 backdrop-blur-xl border-b lg:border lg:rounded-2xl border-white/[0.06] space-y-2">
-          <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-2">
-            {/* Left Group: Dynamic Market Chips */}
-            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5 xl:pb-0">
+        {/* Conflict-Free 2-Row Smart Filter Bar */}
+        <div className="sticky top-16 z-20 -mx-4 px-4 lg:mx-0 lg:px-4 py-3 bg-[#05080D]/95 backdrop-blur-xl border-b lg:border lg:rounded-2xl border-white/[0.06] space-y-2.5">
+          {/* Row 1: Search Input + Today Toggle + Leagues + Sort */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={filterState.search}
+                onChange={(e) => setFilterState((prev) => ({ ...prev, search: e.target.value }))}
+                placeholder="Takım veya lig ara..."
+                className="w-full pl-8 pr-7 py-2 rounded-xl bg-[#0B111C] border border-white/10 text-xs lg:text-[13px] text-slate-100 placeholder:text-slate-500 focus:border-[#00FF85]/50 outline-none"
+              />
+              {filterState.search && (
+                <button
+                  type="button"
+                  onClick={() => setFilterState((prev) => ({ ...prev, search: "" }))}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                  aria-label="Aramayı temizle"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setFilterState((prev) => ({ ...prev, todayOnly: !prev.todayOnly }))}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-all shrink-0 ${
+                filterState.todayOnly
+                  ? "bg-[#00FF85]/20 border-[#00FF85]/55 text-[#00FF85]"
+                  : "bg-[#0B111C] border-white/10 text-slate-300 hover:text-white"
+              }`}
+            >
+              <CalendarClock className="w-3.5 h-3.5" />
+              <span>Sadece Bugün</span>
+              <span className="mono-nums opacity-85">({todayCount})</span>
+            </button>
+
+            <select
+              value={filterState.league}
+              onChange={(e) => setFilterState((prev) => ({ ...prev, league: e.target.value }))}
+              aria-label="Lig seç"
+              className="px-3 py-2 rounded-xl bg-[#0B111C] border border-white/10 text-xs font-semibold text-slate-200 focus:border-[#00FF85]/50 outline-none max-w-[185px]"
+            >
+              <option value="ALL">Tüm Ligler ({leagueOptions.length})</option>
+              {leagueOptions.map((opt) => (
+                <option key={opt.league} value={opt.league}>
+                  {opt.league} ({opt.count})
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={filterState.sort}
+              onChange={(e) =>
+                setFilterState((prev) => ({ ...prev, sort: e.target.value as SortKey }))
+              }
+              aria-label="Sıralama seç"
+              className="px-3 py-2 rounded-xl bg-[#0B111C] border border-white/10 text-xs font-semibold text-slate-200 focus:border-[#00FF85]/50 outline-none"
+            >
+              <option value="confidence">Güven (Yüksek→Düşük)</option>
+              <option value="time">Saat (En Yakın)</option>
+              <option value="odd">Oran (Yüksek→Düşük)</option>
+            </select>
+          </div>
+
+          {/* Row 2: Full-width non-truncated Market Chips + Clear Filters */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-white/[0.05]">
+            <div className="flex flex-wrap items-center gap-1.5">
               {marketChips.map((chip) => {
                 const active = filterState.market === chip.key;
                 return (
@@ -579,7 +643,7 @@ export function HighlightsPage({
                     key={chip.key}
                     type="button"
                     onClick={() => setFilterState((prev) => ({ ...prev, market: chip.key }))}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all shrink-0 ${
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all ${
                       active
                         ? "bg-[#00FF85] text-[#05080D] shadow-[0_0_14px_-4px_rgba(0,255,133,0.6)]"
                         : "bg-white/[0.04] border border-white/10 text-slate-300 hover:text-white hover:border-white/25"
@@ -598,94 +662,29 @@ export function HighlightsPage({
               })}
             </div>
 
-            {/* Right Group: Sadece Bugün + Ligler + Sırala + Arama */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setFilterState((prev) => ({ ...prev, todayOnly: !prev.todayOnly }))}
-                className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-all shrink-0 ${
-                  filterState.todayOnly
-                    ? "bg-[#00FF85]/20 border-[#00FF85]/55 text-[#00FF85]"
-                    : "bg-white/[0.04] border-white/10 text-slate-300 hover:text-white"
-                }`}
-              >
-                <CalendarClock className="w-3.5 h-3.5" />
-                <span>Sadece Bugün</span>
-                <span className="mono-nums opacity-85">({todayCount})</span>
-              </button>
-
-              <select
-                value={filterState.league}
-                onChange={(e) => setFilterState((prev) => ({ ...prev, league: e.target.value }))}
-                aria-label="Lig seç"
-                className="px-2.5 py-1.5 rounded-xl bg-[#0B111C] border border-white/10 text-[11px] font-semibold text-slate-200 focus:border-[#00FF85]/50 outline-none max-w-[165px]"
-              >
-                <option value="ALL">Tüm Ligler ({leagueOptions.length})</option>
-                {leagueOptions.map((opt) => (
-                  <option key={opt.league} value={opt.league}>
-                    {opt.league} ({opt.count})
-                  </option>
-                ))}
-              </select>
-
-              <select
-                value={filterState.sort}
-                onChange={(e) =>
-                  setFilterState((prev) => ({ ...prev, sort: e.target.value as SortKey }))
-                }
-                aria-label="Sıralama seç"
-                className="px-2.5 py-1.5 rounded-xl bg-[#0B111C] border border-white/10 text-[11px] font-semibold text-slate-200 focus:border-[#00FF85]/50 outline-none"
-              >
-                <option value="confidence">Güven (Yüksek→Düşük)</option>
-                <option value="time">Saat (En Yakın)</option>
-                <option value="odd">Oran (Yüksek→Düşük)</option>
-              </select>
-
-              <div className="relative flex-1 min-w-[165px] sm:min-w-[190px]">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  type="text"
-                  value={filterState.search}
-                  onChange={(e) => setFilterState((prev) => ({ ...prev, search: e.target.value }))}
-                  placeholder="Takım veya lig ara..."
-                  className="w-full pl-8 pr-7 py-1.5 rounded-xl bg-[#0B111C] border border-white/10 text-xs text-slate-100 placeholder:text-slate-500 focus:border-[#00FF85]/50 outline-none"
-                />
-                {filterState.search && (
-                  <button
-                    type="button"
-                    onClick={() => setFilterState((prev) => ({ ...prev, search: "" }))}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
-                    aria-label="Aramayı temizle"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
+            {hasActiveFilter && (
+              <div className="flex items-center gap-2.5 text-[11px] ml-auto">
+                <span className="text-slate-300 font-medium mono-nums">
+                  {totalMatched} maç
+                </span>
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="inline-flex items-center gap-1 text-[#00FF85] font-bold hover:underline"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  Filtreleri Temizle
+                </button>
               </div>
-            </div>
+            )}
           </div>
-
-          {hasActiveFilter && (
-            <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/[0.05] text-[11px]">
-              <span className="text-slate-300 font-medium mono-nums">
-                {totalMatched} maç listeleniyor
-              </span>
-              <button
-                type="button"
-                onClick={resetFilters}
-                className="inline-flex items-center gap-1 text-[#00FF85] font-bold hover:underline"
-              >
-                <RotateCcw className="w-3 h-3" />
-                Filtreleri Temizle
-              </button>
-            </div>
-          )}
         </div>
 
-        {/* Match Cards */}
+        {/* Match Cards Grid */}
         {loading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
             {[1, 2, 3, 4].map((n) => (
-              <div key={n} className="h-36 rounded-2xl glass-card animate-pulse" />
+              <div key={n} className="h-40 rounded-2xl glass-card animate-pulse" />
             ))}
           </div>
         ) : loadError ? (
@@ -708,7 +707,7 @@ export function HighlightsPage({
               Tekrar Dene
             </button>
           </div>
-        ) : gridItems.length === 0 && !heroItem ? (
+        ) : gridItems.length === 0 ? (
           <div className="p-8 text-center rounded-2xl glass-card space-y-3">
             <p className="text-sm font-semibold text-slate-200">
               Bu filtreye uyan maç bulunamadı
@@ -728,7 +727,7 @@ export function HighlightsPage({
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
             {gridItems.map((item, idx) => {
               const inSlip = slipIds.has(`${item.match_id}_${item.market_key}_${item.selection_key}`);
               const isElite = item.confidence_score >= 75;
@@ -750,10 +749,10 @@ export function HighlightsPage({
                     logoUrl={item.league_logo_url}
                   />
 
-                  <div className="flex-1 min-w-0 p-3.5 sm:p-4 flex flex-col justify-between">
+                  <div className="flex-1 min-w-0 p-3.5 sm:p-4 lg:p-5 flex flex-col justify-between">
                     {/* Top Meta: League Name | Community Fav + Date & Time */}
                     <div className="flex items-center justify-between gap-2 mb-2.5">
-                      <span className="text-[11px] font-medium text-slate-400 truncate">
+                      <span className="text-[11px] lg:text-xs font-medium text-slate-400 truncate">
                         {item.league}
                       </span>
                       <div className="flex items-center gap-1.5 shrink-0">
@@ -762,19 +761,19 @@ export function HighlightsPage({
                             Favori
                           </span>
                         )}
-                        <span className="text-[11px] mono-nums text-slate-300 font-semibold">
+                        <span className="text-[11px] lg:text-xs mono-nums text-slate-300 font-semibold">
                           {item.start_date_tr} {item.start_time_tr}
                         </span>
                       </div>
                     </div>
 
                     {/* Middle: Home & Away Teams + Dot Form + Tiered Confidence Ring */}
-                    <div className="flex items-center justify-between gap-2.5">
-                      <div className="space-y-2 min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="space-y-2.5 min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 min-w-0">
                             <TeamBadge name={item.home_team} logoUrl={item.home_logo_url} />
-                            <span className="text-sm font-bold text-white truncate">
+                            <span className="text-sm lg:text-[15px] font-bold text-white truncate">
                               {item.home_team}
                             </span>
                           </div>
@@ -783,7 +782,7 @@ export function HighlightsPage({
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 min-w-0">
                             <TeamBadge name={item.away_team} logoUrl={item.away_logo_url} />
-                            <span className="text-sm font-bold text-white truncate">
+                            <span className="text-sm lg:text-[15px] font-bold text-white truncate">
                               {item.away_team}
                             </span>
                           </div>
@@ -791,18 +790,18 @@ export function HighlightsPage({
                         </div>
                       </div>
 
-                      <ConfidenceRing score={item.confidence_score} size={54} />
+                      <ConfidenceRing score={item.confidence_score} size={58} />
                     </div>
 
                     {/* Bottom: Pick/Odd Pill + Model Prob + 44x44 Touch Target + Button */}
-                    <div className="mt-3 pt-2.5 border-t border-white/[0.06] flex items-center justify-between gap-2">
+                    <div className="mt-3.5 pt-3 border-t border-white/[0.06] flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <div
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#00FF85]/10 border border-[#00FF85]/45 min-w-0 ${
+                          className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#00FF85]/10 border border-[#00FF85]/45 min-w-0 ${
                             isElite ? "shadow-[0_0_12px_-4px_rgba(0,255,133,0.45)]" : ""
                           }`}
                         >
-                          <span className="text-xs font-bold text-[#00FF85] truncate">
+                          <span className="text-xs lg:text-[13px] font-bold text-[#00FF85] truncate">
                             {formatPickWithTeam(
                               item.market_key,
                               item.selection_key,
@@ -810,12 +809,12 @@ export function HighlightsPage({
                               item.away_team
                             )}
                           </span>
-                          <span className="text-xs font-extrabold mono-nums text-white shrink-0">
+                          <span className="text-xs lg:text-[13px] font-extrabold mono-nums text-white shrink-0">
                             {item.iddaa_odd.toFixed(2)}
                           </span>
                         </div>
                         {probPct > 0 && (
-                          <span className="px-1.5 py-0.5 rounded-md bg-white/[0.05] border border-white/10 text-[10px] font-bold mono-nums text-emerald-300 shrink-0">
+                          <span className="px-2 py-0.5 rounded-md bg-white/[0.05] border border-white/10 text-[10px] lg:text-[11px] font-bold mono-nums text-emerald-300 shrink-0">
                             %{probPct}
                           </span>
                         )}
@@ -850,10 +849,10 @@ export function HighlightsPage({
         )}
       </div>
 
-      {/* Right Sticky SaaS Panel (Desktop lg+ only) */}
+      {/* Right Smart Panel — Exclusively for Analizler (Desktop lg+ only, ~32%) */}
       <aside className="hidden lg:block lg:sticky lg:top-20 space-y-4">
-        {/* 1. Live Kuponum Fişi */}
-        <div className="rounded-2xl glass-card p-4 space-y-3.5 border-[#00FF85]/25">
+        {/* 1. Kuponum Fişi */}
+        <div className="rounded-2xl glass-card p-4 space-y-3 border-[#00FF85]/25">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Ticket className="w-4 h-4 text-[#00FF85]" />
@@ -867,20 +866,10 @@ export function HighlightsPage({
           </div>
 
           {slipItems.length === 0 ? (
-            <div className="p-3.5 rounded-xl bg-[#0B111C]/80 border border-white/[0.06] space-y-2.5 text-center">
-              <p className="text-xs text-slate-300 leading-relaxed">
-                Maç kartlarındaki <strong className="text-[#00FF85]">+</strong> butonuna tıklayarak
-                kendi özel kuponunu anında oluşturabilirsin.
-              </p>
-              <button
-                type="button"
-                onClick={onGoCoupons}
-                className="w-full py-2 rounded-xl bg-[#00FF85]/15 border border-[#00FF85]/35 text-[#00FF85] text-xs font-bold hover:bg-[#00FF85]/25 transition-colors inline-flex items-center justify-center gap-1.5"
-              >
-                <Layers className="w-3.5 h-3.5" />
-                Hazır Kuponları Gör
-              </button>
-            </div>
+            <p className="text-xs text-slate-400 leading-relaxed px-3 py-2.5 rounded-xl bg-[#0B111C]/75 border border-white/[0.06]">
+              Kartlardaki <strong className="text-[#00FF85]">+</strong> butonuyla kendi özel
+              kuponunu anında oluştur.
+            </p>
           ) : (
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-2">
@@ -905,7 +894,7 @@ export function HighlightsPage({
                 </button>
               </div>
 
-              <div className="space-y-1.5 max-h-60 overflow-y-auto pr-0.5">
+              <div className="space-y-1.5 max-h-52 overflow-y-auto pr-0.5">
                 {slipItems.map((s) => (
                   <div
                     key={s.match_id}
@@ -994,51 +983,158 @@ export function HighlightsPage({
           )}
         </div>
 
-        {/* 2. Live Performance & Ready Coupons Summary */}
-        <div className="rounded-2xl glass-card p-4 space-y-3">
-          <div className="flex items-center justify-between gap-2">
+        {/* 2. Yakında Başlıyor (Canlı Maç Akışı) */}
+        {upcomingSoon.length > 0 && (
+          <div className="rounded-2xl glass-card p-4 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-[#00FF85]" />
+                <h2 className="text-sm font-extrabold text-white">Yakında Başlıyor</h2>
+              </div>
+              <span className="text-[10px] font-semibold text-slate-400">TR Saati</span>
+            </div>
+
+            <div className="space-y-1.5">
+              {upcomingSoon.map((m) => {
+                const inSlip = slipIds.has(`${m.match_id}_${m.market_key}_${m.selection_key}`);
+                return (
+                  <div
+                    key={m.prediction_id}
+                    onClick={() => onSelectMatch(m.match_id, m.prediction_id)}
+                    className="flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl bg-[#0B111C]/85 border border-white/[0.06] hover:border-[#00FF85]/35 cursor-pointer transition-colors"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 text-[11px]">
+                        <span className="mono-nums font-bold text-[#00FF85] shrink-0">
+                          {m.start_time_tr}
+                        </span>
+                        <span className="font-semibold text-slate-100 truncate">
+                          {m.home_team} - {m.away_team}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 truncate mt-0.5">
+                        {formatMarketLabel(m.market_key, m.selection_key)}{" "}
+                        <span className="mono-nums font-bold text-slate-200">
+                          @{m.iddaa_odd.toFixed(2)}
+                        </span>
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleSlip(toSlipItem(m));
+                      }}
+                      className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 transition-all ${
+                        inSlip
+                          ? "bg-[#00FF85] text-[#05080D] border-[#00FF85]"
+                          : "bg-white/[0.04] text-slate-300 border-white/15 hover:border-[#00FF85]/55 hover:text-[#00FF85]"
+                      }`}
+                      title="Kuponuma ekle"
+                      aria-label="Kuponuma ekle"
+                    >
+                      {inSlip ? <Check className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* 3. Piyasa Radarı (Oran Hareketi & Değer) */}
+        {marketRadar.length > 0 && (
+          <div className="rounded-2xl glass-card p-4 space-y-2.5">
             <div className="flex items-center gap-2">
-              <BarChart3 className="w-4 h-4 text-[#00FF85]" />
-              <h2 className="text-sm font-extrabold text-white">Performans &amp; Kuponlar</h2>
+              <Activity className="w-4 h-4 text-[#00FF85]" />
+              <h2 className="text-sm font-extrabold text-white">Piyasa Radarı</h2>
             </div>
-          </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <div className="p-2.5 rounded-xl bg-[#0B111C] border border-white/[0.06]">
-              <p className="text-[10px] text-slate-400 font-medium">Genel Başarı</p>
-              <p className="text-base font-extrabold mono-nums text-[#00FF85] mt-0.5">
-                {winRateDisplay !== null ? `%${winRateDisplay}` : "—"}
-              </p>
-              <p className="text-[10px] text-slate-500 mono-nums">
-                {settledTotalDisplay} sonuçlanan
-              </p>
-            </div>
-            <div className="p-2.5 rounded-xl bg-[#0B111C] border border-white/[0.06]">
-              <p className="text-[10px] text-slate-400 font-medium">Hazır Kuponlar</p>
-              <p className="text-base font-extrabold mono-nums text-white mt-0.5">
-                {activeCouponsCount}
-              </p>
-              <p className="text-[10px] text-slate-500">aktif kupon</p>
+            <div className="space-y-1.5">
+              {marketRadar.map((entry) => {
+                const m = entry.item;
+                const isDrop = entry.signalLabel === "Oran Düşüşü";
+                return (
+                  <button
+                    key={m.prediction_id}
+                    type="button"
+                    onClick={() => onSelectMatch(m.match_id, m.prediction_id)}
+                    className="w-full text-left px-2.5 py-2 rounded-xl bg-[#0B111C]/85 border border-white/[0.06] hover:border-[#00FF85]/35 transition-colors space-y-1"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-slate-100 truncate">
+                        {m.home_team} - {m.away_team}
+                      </span>
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[9px] font-extrabold shrink-0 ${
+                          isDrop
+                            ? "bg-cyan-500/15 text-cyan-300 border border-cyan-500/30"
+                            : "bg-emerald-500/15 text-[#00FF85] border border-emerald-500/30"
+                        }`}
+                      >
+                        {entry.signalLabel}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-[10px] text-slate-400">
+                      <span className="truncate">
+                        {formatMarketLabel(m.market_key, m.selection_key)} ·{" "}
+                        <strong className="mono-nums text-slate-200">{m.iddaa_odd.toFixed(2)}</strong>
+                      </span>
+                      <span className="mono-nums font-bold text-slate-200 shrink-0">
+                        {entry.signalMetric}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </div>
+        )}
 
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={onGoCoupons}
-              className="py-2 px-2.5 rounded-xl bg-white/[0.04] border border-white/10 hover:border-[#00FF85]/45 text-xs font-bold text-slate-200 hover:text-[#00FF85] transition-colors inline-flex items-center justify-center gap-1"
-            >
-              Kuponlara Git
-            </button>
-            <button
-              type="button"
-              onClick={onGoPerformance}
-              className="py-2 px-2.5 rounded-xl bg-white/[0.04] border border-white/10 hover:border-[#00FF85]/45 text-xs font-bold text-slate-200 hover:text-[#00FF85] transition-colors inline-flex items-center justify-center gap-1"
-            >
-              Performansı Gör
-            </button>
+        {/* 4. Hızlı Lig Kısayolları */}
+        {leagueOptions.length > 0 && (
+          <div className="rounded-2xl glass-card p-4 space-y-2.5">
+            <div className="flex items-center gap-2">
+              <Trophy className="w-4 h-4 text-[#00FF85]" />
+              <h2 className="text-sm font-extrabold text-white">Hızlı Lig Kısayolları</h2>
+            </div>
+
+            <div className="space-y-1.5">
+              {leagueOptions.slice(0, 6).map((opt) => {
+                const active = filterState.league === opt.league;
+                return (
+                  <button
+                    key={opt.league}
+                    type="button"
+                    onClick={() =>
+                      setFilterState((prev) => ({
+                        ...prev,
+                        league: prev.league === opt.league ? "ALL" : opt.league,
+                      }))
+                    }
+                    className={`w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl border text-xs transition-all ${
+                      active
+                        ? "bg-[#00FF85]/15 border-[#00FF85]/50 text-[#00FF85]"
+                        : "bg-[#0B111C]/85 border-white/[0.06] text-slate-200 hover:border-white/20"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <LeagueBadge
+                        name={opt.league}
+                        country={opt.country}
+                        logoUrl={opt.logoUrl}
+                      />
+                      <span className="font-semibold truncate">{opt.league}</span>
+                    </div>
+                    <span className="mono-nums text-[11px] font-bold shrink-0 opacity-85">
+                      {opt.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
       </aside>
     </div>
   );
