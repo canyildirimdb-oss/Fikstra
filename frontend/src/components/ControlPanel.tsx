@@ -180,9 +180,9 @@ export function ControlPanel({ onExit }: { onExit: () => void }) {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <img
-                src="/logo-profile.png"
+                src="/logo.png"
                 alt="Fikstra"
-                className="w-9 h-9 rounded-xl border border-emerald-500/35 object-cover shrink-0"
+                className="w-9 h-9 object-contain shrink-0 drop-shadow-[0_0_8px_rgba(0,255,133,0.35)]"
               />
               <div>
                 <h1 className="text-sm font-extrabold text-white">Fikstra Kontrol Merkezi</h1>
@@ -242,9 +242,9 @@ export function ControlPanel({ onExit }: { onExit: () => void }) {
         <div className="flex flex-wrap items-center justify-between gap-2 p-4 rounded-2xl glass-card">
           <div className="flex items-center gap-2.5">
             <img
-              src="/logo-profile.png"
+              src="/logo.png"
               alt="Fikstra"
-              className="w-9 h-9 rounded-xl border border-emerald-500/35 object-cover shrink-0"
+              className="w-9 h-9 object-contain shrink-0 drop-shadow-[0_0_8px_rgba(0,255,133,0.35)]"
             />
             <div>
               <h1 className="text-base font-extrabold text-white">Fikstra Kontrol Merkezi</h1>

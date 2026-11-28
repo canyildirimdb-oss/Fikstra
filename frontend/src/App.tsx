@@ -566,9 +566,9 @@ export function App() {
         <div className={`${containerMaxWidth} mx-auto px-4 h-16 flex items-center justify-between gap-3`}>
           <div className="flex items-center gap-3">
             <img
-              src="/logo-profile.png"
+              src="/logo.png"
               alt="Fikstra"
-              className="w-9 h-9 rounded-xl border border-[#00FF85]/40 shadow-[0_0_18px_-3px_rgba(0,255,133,0.4)] object-cover shrink-0"
+              className="w-9 h-9 object-contain shrink-0 drop-shadow-[0_0_10px_rgba(0,255,133,0.35)]"
             />
             <div>
               <h1 className="text-base font-extrabold tracking-tight text-white leading-none">
@@ -800,7 +800,7 @@ export function App() {
         {/* Subtle Transparency Footer */}
         <footer className="mt-8 pt-4 border-t border-white/[0.06] flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
           <span className="inline-flex items-center gap-2">
-            <img src="/logo-mark.png" alt="Fikstra" className="w-4 h-4 object-contain" />
+            <img src="/logo.png" alt="Fikstra" className="w-4 h-4 object-contain drop-shadow-[0_0_6px_rgba(0,255,133,0.3)]" />
             Fikstra • Veri odaklı maç analizi (18+)
           </span>
           <button
@@ -1208,7 +1208,7 @@ export function App() {
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
-                  <img src="/logo-mark.png" alt="Fikstra" className="w-6 h-6 object-contain" />
+                  <img src="/logo.png" alt="Fikstra" className="w-6 h-6 object-contain drop-shadow-[0_0_8px_rgba(0,255,133,0.35)]" />
                   <h3 className="text-sm font-extrabold text-white">Fikstra Nasıl Çalışır?</h3>
                 </div>
                 <button

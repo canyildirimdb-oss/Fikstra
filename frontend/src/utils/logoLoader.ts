@@ -1,7 +1,7 @@
 let cachedLogoPromise: Promise<HTMLImageElement | null> | null = null;
 
 /**
- * Loads the official transparent Fikstra logo mark (/logo-mark.png) for canvas PNG cards.
+ * Loads the official transparent Fikstra logo mark (/logo.png) for canvas PNG cards.
  */
 export function loadOfficialLogoMark(): Promise<HTMLImageElement | null> {
   if (cachedLogoPromise) return cachedLogoPromise;
@@ -10,7 +10,7 @@ export function loadOfficialLogoMark(): Promise<HTMLImageElement | null> {
     img.crossOrigin = "anonymous";
     img.onload = () => resolve(img);
     img.onerror = () => resolve(null);
-    img.src = "/logo-mark.png";
+    img.src = "/logo.png";
   });
   return cachedLogoPromise;
 }

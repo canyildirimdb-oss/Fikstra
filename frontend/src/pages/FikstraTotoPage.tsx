@@ -412,9 +412,9 @@ export function FikstraTotoPage({
       {!week || !liveStats ? (
         <div className="p-6 sm:p-8 rounded-3xl glass-card space-y-5 text-center">
           <img
-            src="/logo-profile.png"
+            src="/logo.png"
             alt="Fikstra"
-            className="w-12 h-12 rounded-2xl border border-[#00FF85]/35 shadow-[0_0_24px_-6px_rgba(0,255,133,0.4)] mx-auto object-cover"
+            className="w-12 h-12 mx-auto object-contain drop-shadow-[0_0_14px_rgba(0,255,133,0.4)]"
           />
           <div className="space-y-1.5 max-w-lg mx-auto">
             <h2 className="text-base sm:text-lg font-extrabold text-white">
